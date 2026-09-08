@@ -33,6 +33,10 @@ jobs:
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 
+      # Keep CI resilient if a checkout platform loses the executable file mode.
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
       - name: Build and test
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --stacktrace
 
