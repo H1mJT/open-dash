@@ -24,6 +24,7 @@ import com.example.opendash.ui.components.BtnSize
 import com.example.opendash.ui.components.BtnVariant
 import com.example.opendash.ui.components.OpenDashBtn
 import com.example.opendash.ui.components.OpenDashSegmented
+import com.example.opendash.ui.components.ScreenHeader
 import com.example.opendash.ui.theme.GeistFamily
 
 /** Dedicated page keeps the map selector reachable from both More and Settings. */
