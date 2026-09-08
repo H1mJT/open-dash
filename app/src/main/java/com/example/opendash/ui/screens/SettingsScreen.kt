@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -66,8 +65,6 @@ import com.example.opendash.data.DashWallpaperKind
 import com.example.opendash.data.DashWallpaperPaths
 import com.example.opendash.data.CurrencySettings
 import com.example.opendash.data.OpenDashCurrency
-import com.example.opendash.data.MapProvider
-import com.example.opendash.data.MapProviderSettings
 import com.example.opendash.viewmodel.AuthViewModel
 import com.example.opendash.viewmodel.ConnectionState
 import com.example.opendash.viewmodel.DashViewModel
@@ -76,6 +73,7 @@ private enum class MorePage(val title: String) {
     ROOT("More"),
     SETTINGS("Settings"),
     ABOUT("About"),
+    MAP_PROVIDER("Map provider"),
     HELP("Help"),
     TERMS("Terms & Conditions"),
     LICENSE("License"),
@@ -132,9 +130,6 @@ fun SettingsScreen(
         true
     }
     val selectedCurrency by CurrencySettings.currency.collectAsState()
-    val mapProvider by MapProviderSettings.provider.collectAsState()
-    val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
-    var googleMapsKey by remember { mutableStateOf(MapProviderSettings.googleMapsKey().orEmpty()) }
     var themeMenuExpanded by remember { mutableStateOf(false) }
     var currencyMenuExpanded by remember { mutableStateOf(false) }
     var pendingWallpaperUri by remember { mutableStateOf<Uri?>(null) }
@@ -183,6 +178,10 @@ fun SettingsScreen(
     var page by remember { mutableStateOf(MorePage.ROOT) }
     BackHandler(enabled = page != MorePage.ROOT) { page = MorePage.ROOT }
 
+    if (page == MorePage.MAP_PROVIDER) {
+        MapProviderSettingsPage(onBack = { page = MorePage.SETTINGS })
+        return
+    }
     if (page != MorePage.ROOT && page != MorePage.SETTINGS) {
         MoreInformationPage(page = page, onBack = { page = MorePage.ROOT })
         return
@@ -241,6 +240,8 @@ fun SettingsScreen(
             SectionLabel("General")
             SettingsGroup(padding = 6.dp) {
                 MoreRow(OpenDashIcons.Gear, "Settings", "Connection, ride, wallpaper, voice, units", onClick = { page = MorePage.SETTINGS })
+                SettingsDivider(Modifier.padding(horizontal = 6.dp))
+                MoreRow(OpenDashIcons.Navi, "Map provider", "OpenFreeMap or Google Maps", onClick = { page = MorePage.MAP_PROVIDER })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
                 MoreRow(OpenDashIcons.Dash, "About", "OpenDash v${BuildConfig.VERSION_NAME}", onClick = { page = MorePage.ABOUT })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
@@ -626,30 +627,15 @@ fun SettingsScreen(
         }
 
         SectionLabel("Map provider")
-        SettingsGroup(padding = 14.dp) {
-            OpenDashSegmented(
-                listOf("OpenFreeMap", "Google Maps"),
-                if (mapProvider == MapProvider.GOOGLE_MAPS) "Google Maps" else "OpenFreeMap",
-                { choice -> MapProviderSettings.select(ctx, if (choice == "Google Maps") MapProvider.GOOGLE_MAPS else MapProvider.OPEN_FREE_MAP) },
-                Modifier.fillMaxWidth(),
+        SettingsGroup(padding = 6.dp) {
+            SettingRow(
+                OpenDashIcons.Navi,
+                "Map provider",
+                "Choose OpenFreeMap or Google Maps",
+                control = { Icon(OpenDashIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) },
+                last = true,
+                onClick = { page = MorePage.MAP_PROVIDER },
             )
-            if (mapProvider == MapProvider.GOOGLE_MAPS) {
-                OutlinedTextField(
-                    value = googleMapsKey,
-                    onValueChange = { googleMapsKey = it },
-                    label = { Text("Google Maps Embed API key") },
-                    supportingText = { Text("Enable Maps Embed API and billing in your Google Cloud project. The key is encrypted on this device.") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
-                OpenDashBtn(
-                    if (hasGoogleMapsKey) "Save Google Maps key" else "Add Google Maps key",
-                    onClick = { MapProviderSettings.saveGoogleMapsKey(ctx, googleMapsKey) },
-                    variant = BtnVariant.Secondary,
-                    size = BtnSize.Sm,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
         }
 
         SectionLabel("Units")
