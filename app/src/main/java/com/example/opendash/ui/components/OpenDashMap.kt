@@ -3,6 +3,9 @@ package com.example.opendash.ui.components
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.net.Uri
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.graphics.Path
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -15,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.opendash.data.MapProvider
+import com.example.opendash.data.MapProviderSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.opendash.dash.nav.GeoPoint
@@ -40,8 +45,8 @@ private const val RIDER_ICON = "rider-chevron"
 private const val DEST_ICON = "dest-pin"
 
 /**
- * In-app phone map (MapLibre + OpenFreeMap). Keyless and redistributable — no Google
- * Maps SDK / API key. The physical dash still uses the off-screen power-efficient renderer.
+ * In-app phone map. Riders can select keyless MapLibre/OpenFreeMap or Google Maps Embed
+ * in Settings; the physical dash still uses the off-screen power-efficient renderer.
  *
  * Modes: [fitRoute] frames the whole route; [navMode] tilts/zooms/rotates to heading with a
  * rider chevron; default follows the rider north-up.
@@ -57,6 +62,32 @@ fun OpenDashMap(
     fitRoute: Boolean = false,
     navMode: Boolean = false,
     riderBearing: Float = 0f,
+) {
+    val provider by MapProviderSettings.provider.collectAsState()
+    val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
+    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey) {
+        GoogleMapsEmbed(
+            riderLat = riderLat,
+            riderLng = riderLng,
+            dest = dest,
+            modifier = modifier,
+        )
+    } else {
+        MapLibreOpenDashMap(riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode, riderBearing, modifier)
+    }
+}
+
+@Composable
+private fun MapLibreOpenDashMap(
+    riderLat: Double?,
+    riderLng: Double?,
+    dest: Pair<Double, Double>?,
+    routePoints: List<GeoPoint>,
+    hasLocationPermission: Boolean,
+    fitRoute: Boolean,
+    navMode: Boolean,
+    riderBearing: Float,
+    modifier: Modifier,
 ) {
     val context = LocalContext.current
     remember { MapLibre.getInstance(context) }
@@ -161,6 +192,47 @@ fun OpenDashMap(
     }
 
     AndroidView(factory = { mapView }, modifier = modifier)
+}
+
+@Composable
+private fun GoogleMapsEmbed(
+    riderLat: Double?,
+    riderLng: Double?,
+    dest: Pair<Double, Double>?,
+    modifier: Modifier,
+) {
+    val context = LocalContext.current
+    val key = MapProviderSettings.googleMapsKey() ?: return
+    val webView = remember { WebView(context) }
+    val url = remember(key, riderLat, riderLng, dest) {
+        val destination = dest?.let { "${it.first},${it.second}" }
+        val origin = if (riderLat != null && riderLng != null) "$riderLat,$riderLng" else null
+        when {
+            destination != null && origin != null ->
+                "https://www.google.com/maps/embed/v1/directions?key=${Uri.encode(key)}&origin=${Uri.encode(origin)}&destination=${Uri.encode(destination)}&mode=driving"
+            destination != null ->
+                "https://www.google.com/maps/embed/v1/place?key=${Uri.encode(key)}&q=${Uri.encode(destination)}"
+            origin != null ->
+                "https://www.google.com/maps/embed/v1/place?key=${Uri.encode(key)}&q=${Uri.encode(origin)}"
+            else -> "https://www.google.com/maps/embed/v1/view?key=${Uri.encode(key)}&center=0,0&zoom=1"
+        }
+    }
+    AndroidView(
+        factory = {
+            webView.apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = false
+                settings.setGeolocationEnabled(false)
+                webViewClient = WebViewClient()
+                loadUrl(url)
+            }
+        },
+        update = { if (it.url != url) it.loadUrl(url) },
+        modifier = modifier,
+    )
+    DisposableEffect(webView) {
+        onDispose { webView.destroy() }
+    }
 }
 
 /** Google-style blue chevron-in-a-circle, pointing "up" (rotated to heading by the symbol). */
