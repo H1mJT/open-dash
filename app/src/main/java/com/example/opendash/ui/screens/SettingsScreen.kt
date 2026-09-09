@@ -72,6 +72,7 @@ import com.example.opendash.data.MapBounds
 import com.example.opendash.data.MapPack
 import com.example.opendash.data.MapPackDownloadState
 import com.example.opendash.dash.DashLayout
+import com.example.opendash.dash.nav.ManeuverType
 
 private enum class MorePage(val title: String) {
     ROOT("More"),
@@ -108,6 +109,7 @@ fun SettingsScreen(
     var screenOff   by remember { mutableStateOf(true) }
     var keepAwake   by remember { mutableStateOf(true) }
     var turnSymbolCode by remember { mutableIntStateOf(dashUi.turnSymbolTestCode ?: 0) }
+    var turnSymbolMappingMenuExpanded by remember { mutableStateOf(false) }
     var units       by remember { mutableStateOf("Kilometres") }
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -338,7 +340,7 @@ fun SettingsScreen(
             SettingRow(
                 OpenDashIcons.Navi,
                 "Turn symbol calibrator",
-                "Select a raw symbol number, send it to the dash, then note the icon it displays.",
+                "Send a raw symbol to the dash, then save the direction you see. Choose N/A when it shows nothing.",
                 control = { Text("0x%02X".format(turnSymbolCode), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
             )
             Slider(
@@ -356,10 +358,41 @@ fun SettingsScreen(
                 onClick = { dashViewModel.sendTurnSymbolTest(turnSymbolCode) },
             )
             dashUi.turnSymbolTestCode?.let { activeCode ->
+                val mappedManeuver = dashUi.turnSymbolMappings[activeCode]
                 SettingRow(
                     OpenDashIcons.Dash,
                     "Testing 0x%02X".format(activeCode),
-                    "Stop testing to return to live route symbols.",
+                    "What direction does this symbol show?",
+                    control = { Text(mappedManeuver?.calibrationLabel ?: "N/A", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+                    onClick = { turnSymbolMappingMenuExpanded = true },
+                )
+                DropdownMenu(
+                    expanded = turnSymbolMappingMenuExpanded,
+                    onDismissRequest = { turnSymbolMappingMenuExpanded = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.heightIn(max = 320.dp),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("N/A — no symbol") },
+                        onClick = {
+                            dashViewModel.setTurnSymbolMapping(activeCode, null)
+                            turnSymbolMappingMenuExpanded = false
+                        },
+                    )
+                    ManeuverType.entries.forEach { maneuver ->
+                        DropdownMenuItem(
+                            text = { Text(maneuver.calibrationLabel) },
+                            onClick = {
+                                dashViewModel.setTurnSymbolMapping(activeCode, maneuver)
+                                turnSymbolMappingMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+                SettingRow(
+                    OpenDashIcons.Dash,
+                    "Stop testing",
+                    "Return to live route symbols.",
                     control = { Text("Stop", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
                     onClick = { dashViewModel.stopTurnSymbolTest() },
                 )
@@ -857,6 +890,21 @@ fun SettingsScreen(
         )
     }
 }
+
+private val ManeuverType.calibrationLabel: String
+    get() = when (this) {
+        ManeuverType.CONTINUE -> "Continue / straight"
+        ManeuverType.TURN_LEFT -> "Turn left"
+        ManeuverType.TURN_RIGHT -> "Turn right"
+        ManeuverType.SLIGHT_LEFT -> "Slight left"
+        ManeuverType.SLIGHT_RIGHT -> "Slight right"
+        ManeuverType.SHARP_LEFT -> "Sharp left"
+        ManeuverType.SHARP_RIGHT -> "Sharp right"
+        ManeuverType.UTURN -> "U-turn"
+        ManeuverType.ROUNDABOUT -> "Roundabout"
+        ManeuverType.DEPART -> "Depart"
+        ManeuverType.ARRIVE -> "Arrive"
+    }
 
 private fun formatMapBytes(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))

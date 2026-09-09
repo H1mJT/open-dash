@@ -27,6 +27,7 @@ import com.example.opendash.dash.map.Mercator
 import com.example.opendash.dash.map.TileProvider
 import com.example.opendash.dash.nav.GeoPoint
 import com.example.opendash.dash.nav.NavEngine
+import com.example.opendash.dash.nav.ManeuverType
 import com.example.opendash.dash.nav.Route
 import com.example.opendash.dash.nav.Router
 import com.example.opendash.dash.protocol.DashCommands
@@ -112,6 +113,8 @@ data class DashUiState(
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
     /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
     val turnSymbolTestCode: Int? = null,
+    /** Result chosen by the rider for each tested native navigation glyph. */
+    val turnSymbolMappings: Map<Int, ManeuverType> = emptyMap(),
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -158,6 +161,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             navigationTiltEnabled = dashConfig.navigationTiltEnabled,
             streamFps = dashConfig.streamFps,
             streamBitrateKbps = dashConfig.streamBitrateKbps,
+            turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, code) -> code to type },
         )
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
@@ -220,6 +224,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     fun stopTurnSymbolTest() {
         _ui.update { it.copy(turnSymbolTestCode = null) }
         session.clearNavInfo()
+    }
+
+    /** Saves the rider's result for a calibration glyph; null means the glyph displayed nothing. */
+    fun setTurnSymbolMapping(code: Int, maneuver: ManeuverType?) {
+        dashConfig.setManeuverGlyph(code, maneuver)
+        _ui.update {
+            it.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        }
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -949,13 +961,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             // real route distances and ETA so the dash stays in its navigation view.
             val testGlyph = _ui.value.turnSymbolTestCode
             session.updateNavInfo(
-                testGlyph ?: ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                testGlyph ?: ns.currentManeuver?.type?.let(dashConfig::maneuverGlyphCode) ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
-                secondaryManeuver = testGlyph ?: ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                secondaryManeuver = testGlyph ?: ns.nextManeuver?.type?.let(dashConfig::maneuverGlyphCode) ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
             voice.maybeAnnounce(ns.currentManeuver, ns.nextTurnM, ns.remainingM)

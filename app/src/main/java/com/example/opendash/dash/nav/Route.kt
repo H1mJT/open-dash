@@ -24,6 +24,19 @@ enum class ManeuverType { CONTINUE, TURN_LEFT, TURN_RIGHT, SLIGHT_LEFT, SLIGHT_R
             else -> CONTINUE
         }
     }
+
+    /** Known native-dash glyph value, used until the rider calibrates their dash. */
+    val defaultDashCode: Int get() = when (this) {
+        CONTINUE, DEPART, ARRIVE -> 0x00
+        SLIGHT_RIGHT -> 0x01
+        TURN_RIGHT -> 0x02
+        SHARP_RIGHT -> 0x03
+        UTURN -> 0x04
+        SHARP_LEFT -> 0x05
+        TURN_LEFT -> 0x06
+        SLIGHT_LEFT -> 0x07
+        ROUNDABOUT -> 0x0B
+    }
 }
 
 /** One routing instruction located at a point along the geometry. */
@@ -55,17 +68,7 @@ data class Maneuver(
      * like a roundabout exit. The other codes are the directional glyph family used
      * by the dash's navigation widget.
      */
-    val dashCode: Int get() = when (type) {
-        ManeuverType.CONTINUE, ManeuverType.DEPART, ManeuverType.ARRIVE -> 0x00
-        ManeuverType.SLIGHT_RIGHT -> 0x01
-        ManeuverType.TURN_RIGHT   -> 0x02
-        ManeuverType.SHARP_RIGHT  -> 0x03
-        ManeuverType.UTURN        -> 0x04
-        ManeuverType.SHARP_LEFT   -> 0x05
-        ManeuverType.TURN_LEFT    -> 0x06
-        ManeuverType.SLIGHT_LEFT  -> 0x07
-        ManeuverType.ROUNDABOUT   -> 0x0B
-    }
+    val dashCode: Int get() = type.defaultDashCode
 }
 
 /** Lane advice supplied by OSRM's intersection metadata. */
