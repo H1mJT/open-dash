@@ -106,6 +106,12 @@ data class DashUiState(
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
     val dashLayout: DashLayout = DashLayout.MAP_FIRST,
+    /** Perspective map view, only used while following a route heading-up. */
+    val navigationTiltEnabled: Boolean = true,
+    val streamFps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS,
+    val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
+    /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
+    val turnSymbolTestCode: Int? = null,
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -143,7 +149,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var userWantsConnection = false
 
     init {
-        _ui.value = _ui.value.copy(dashLayout = dashConfig.layout)
+        streamFps = dashConfig.streamFps
+        streamBitrateKbps = dashConfig.streamBitrateKbps
+        _ui.value = _ui.value.copy(
+            dashLayout = dashConfig.layout,
+            navigationTiltEnabled = dashConfig.navigationTiltEnabled,
+            streamFps = dashConfig.streamFps,
+            streamBitrateKbps = dashConfig.streamBitrateKbps,
+        )
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
                 if (route?.isOffline != true) _ui.update {
@@ -157,6 +170,54 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         dashConfig.layout = layout
         _ui.update { it.copy(dashLayout = layout) }
         lastSignature = ""
+    }
+
+    fun setNavigationTiltEnabled(enabled: Boolean) {
+        dashConfig.navigationTiltEnabled = enabled
+        _ui.update { it.copy(navigationTiltEnabled = enabled) }
+        lastSignature = ""
+    }
+
+    fun setStreamFps(fps: Int) {
+        val selected = fps.coerceIn(2, 8)
+        dashConfig.streamFps = selected
+        streamFps = selected
+        _ui.update { it.copy(streamFps = selected) }
+    }
+
+    fun setStreamBitrateKbps(kbps: Int) {
+        val selected = kbps.coerceIn(100, 500)
+        dashConfig.streamBitrateKbps = selected
+        streamBitrateKbps = selected
+        encoder?.updateBitrate(selected * 1_000)
+        _ui.update { it.copy(streamBitrateKbps = selected) }
+    }
+
+    /**
+     * Show a raw Tripper maneuver glyph on both native turn slots. This makes it possible
+     * to build a firmware-specific glyph map from the Settings screen without changing
+     * route data. It deliberately overrides live route glyphs until [stopTurnSymbolTest].
+     */
+    fun sendTurnSymbolTest(code: Int) {
+        if (session.state.value != DashState.STREAMING) {
+            _ui.update { it.copy(errorMessage = "Connect and start streaming before sending a turn symbol.") }
+            return
+        }
+        val glyph = code.coerceIn(0, 0xFF)
+        session.updateNavInfo(
+            maneuver = glyph,
+            primaryDist = 100,
+            primaryUnit = DashCommands.NAV_UNIT_METERS,
+            totalDist = 10,
+            totalUnit = DashCommands.NAV_UNIT_KM_TENTHS,
+            secondaryManeuver = glyph,
+        )
+        _ui.update { it.copy(turnSymbolTestCode = glyph, errorMessage = null) }
+    }
+
+    fun stopTurnSymbolTest() {
+        _ui.update { it.copy(turnSymbolTestCode = null) }
+        session.clearNavInfo()
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -187,6 +248,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var fixWallMs = 0L
     private var lastFixTime = 0L
     @Volatile private var gpsStatus = GpsStatus.LOST
+    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
+    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     // Smoothed rider position shown on the dash frame (locked to the camera centre so the
     // marker stays put and the map slides under it). null = no GPS.
@@ -221,7 +284,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         private const val MANUAL_IDLE_MS = 8_000L
         private const val FORCE_REDRAW_MS = 2_000L
         private const val SMOOTH_TAU = 0.28      // camera smoothing time constant (s)
-        private const val FPS_MOVING = 4
         private const val FPS_IDLE = 2
         private const val BTN_CALL_ANSWER = 0x06
         private const val BTN_CALL_REJECT = 0x07
@@ -763,7 +825,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(frameCount = it.frameCount + 1) }
         }
         encoder?.release()
-        encoder = DashEncoder(onEncoded).also { it.prepare() }
+        encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
         frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
         lastSignature = ""
@@ -782,7 +844,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive && session.state.value == DashState.STREAMING) {
                 try {
                     tick()
-                    // Push the (possibly cached) frame to the encoder at a steady 4 fps.
+                    // Push the (possibly cached) frame to the encoder at the selected rate.
                     val bmp = frameBitmap
                     val enc = encoder
                     if (bmp != null && enc != null) {
@@ -806,7 +868,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                         // stream recovers. The fresh encoder re-emits SPS/PPS, which the
                         // NAL processor bundles into the next IDR for the dash decoder.
                         runCatching { encoder?.release() }
-                        encoder = runCatching { DashEncoder(onEncoded).also { it.prepare() } }
+                        encoder = runCatching { DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() } }
                             .onFailure { DebugLog.e("DashViewModel", { "Encoder rebuild failed" }, it) }
                             .getOrNull()
                         lastSignature = "" // force a full redraw on the next tick
@@ -814,7 +876,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 // Dynamic pacing: buttery while moving, throttled when stopped (power).
-                delay(1000L / (if (camMoving) FPS_MOVING else FPS_IDLE))
+                delay(1000L / (if (camMoving) streamFps else minOf(FPS_IDLE, streamFps)))
             }
         }
     }
@@ -883,14 +945,17 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             val etaHHMM = "%02d%02d".format(
                 arrival.get(java.util.Calendar.HOUR_OF_DAY), arrival.get(java.util.Calendar.MINUTE)
             )
+            // A calibration glyph deliberately replaces both live glyphs, while retaining
+            // real route distances and ETA so the dash stays in its navigation view.
+            val testGlyph = _ui.value.turnSymbolTestCode
             session.updateNavInfo(
-                ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                testGlyph ?: ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
-                secondaryManeuver = ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                secondaryManeuver = testGlyph ?: ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
             voice.maybeAnnounce(ns.currentManeuver, ns.nextTurnM, ns.remainingM)
@@ -1110,10 +1175,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             nextManeuverDistance = _ui.value.nextManeuverDistance,
             rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
-            // Top-down (heading-up) nav view. The 3D perspective tilt is DISABLED: warping
-            // flat raster tiles via setPolyToPoly stretches the baked-in map labels and
-            // skews the angle (you can't get true Google-Maps 3D without vector tiles).
-            tilt3d = false,
+            // This is a perspective treatment of raster tiles rather than true 3D terrain,
+            // but it supplies the forward-looking navigation view riders expect. It remains
+            // optional because perspective-warped raster labels are less crisp than vector tiles.
+            tilt3d = _ui.value.navigationTiltEnabled,
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,

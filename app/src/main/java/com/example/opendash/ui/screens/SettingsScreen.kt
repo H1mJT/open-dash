@@ -107,6 +107,7 @@ fun SettingsScreen(
     var autoConnect by remember { mutableStateOf(true) }
     var screenOff   by remember { mutableStateOf(true) }
     var keepAwake   by remember { mutableStateOf(true) }
+    var turnSymbolCode by remember { mutableIntStateOf(dashUi.turnSymbolTestCode ?: 0) }
     var units       by remember { mutableStateOf("Kilometres") }
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -290,8 +291,31 @@ fun SettingsScreen(
             SettingRow(OpenDashIcons.Sync, "Auto-connect on start", "Link when the bike is near",
                 control = { SettingsToggle(autoConnect) { autoConnect = it } })
             SettingsDivider(Modifier.padding(horizontal = 6.dp))
-            SettingRow(OpenDashIcons.Zap, "Stream quality", "Balanced · saves battery",
-                control = { Icon(OpenDashIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) }, last = true)
+            SettingRow(
+                OpenDashIcons.Zap,
+                "Stream frame rate",
+                "Higher rates make map and joystick changes appear sooner but use more battery and may not suit every dash.",
+                control = { Text("${dashUi.streamFps} fps", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            )
+            OpenDashSegmented(
+                listOf("2 fps", "4 fps", "6 fps", "8 fps"),
+                "${dashUi.streamFps} fps",
+                { value -> dashViewModel.setStreamFps(value.substringBefore(' ').toInt()) },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            SettingRow(
+                OpenDashIcons.Zap,
+                "Stream bitrate",
+                "Higher bitrate improves map detail; use a lower value if the dash stutters. Reconnect if your encoder rejects a live change.",
+                control = { Text("${dashUi.streamBitrateKbps} kbps", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            )
+            OpenDashSegmented(
+                listOf("150", "200", "300", "400"),
+                dashUi.streamBitrateKbps.toString(),
+                { value -> dashViewModel.setStreamBitrateKbps(value.toInt()) },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
 
         SectionLabel("During a ride")
@@ -307,6 +331,39 @@ fun SettingsScreen(
                 { label -> dashViewModel.setDashLayout(DashLayout.entries.first { it.label == label }) },
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             )
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            SettingRow(OpenDashIcons.Navi, "Perspective navigation map", "Tilt the heading-up dash map toward the road ahead",
+                control = { SettingsToggle(dashUi.navigationTiltEnabled) { dashViewModel.setNavigationTiltEnabled(it) } })
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            SettingRow(
+                OpenDashIcons.Navi,
+                "Turn symbol calibrator",
+                "Select a raw symbol number, send it to the dash, then note the icon it displays.",
+                control = { Text("0x%02X".format(turnSymbolCode), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            )
+            Slider(
+                value = turnSymbolCode.toFloat(),
+                onValueChange = { turnSymbolCode = it.toInt() },
+                valueRange = 0f..255f,
+                steps = 254,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            )
+            SettingRow(
+                OpenDashIcons.Dash,
+                "Send symbol 0x%02X".format(turnSymbolCode),
+                "Sends this number to both native turn-by-turn slots while connected.",
+                control = { Text("Send", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+                onClick = { dashViewModel.sendTurnSymbolTest(turnSymbolCode) },
+            )
+            dashUi.turnSymbolTestCode?.let { activeCode ->
+                SettingRow(
+                    OpenDashIcons.Dash,
+                    "Testing 0x%02X".format(activeCode),
+                    "Stop testing to return to live route symbols.",
+                    control = { Text("Stop", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+                    onClick = { dashViewModel.stopTurnSymbolTest() },
+                )
+            }
             SettingsDivider(Modifier.padding(horizontal = 6.dp))
             SettingRow(OpenDashIcons.Dash, "Keep dash awake", "Prevent Tripper sleep",
                 control = { SettingsToggle(keepAwake) { keepAwake = it } }, last = true)
