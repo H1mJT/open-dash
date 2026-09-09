@@ -808,6 +808,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             riderLat = matchedLat,
             riderLng = matchedLng,
             riderBearing = heading,
+            // Keep the phone map's blue line in sync with navigation progress instead of
+            // continuing to show the completed part of the original route.
+            routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
             remainingKm = remainingM?.let { it / 1000.0 },
             etaMinutes = etaSec?.let { (it / 60.0).toInt() },
             maneuver = null,
@@ -1077,6 +1080,26 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         }
         val nextTurn = nextMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) } ?: remaining
         return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, nextMan)
+    }
+
+    /** Route segment from the current rider position through the destination. */
+    private fun remainingRouteGeometry(
+        route: Route,
+        progressMeters: Double,
+        riderLat: Double?,
+        riderLng: Double?,
+    ): List<GeoPoint> {
+        val geometry = route.geometry
+        if (geometry.size < 2) return geometry
+        val cumulative = route.cumulative
+        val segment = (0 until geometry.lastIndex).lastOrNull { cumulative[it] <= progressMeters }
+            ?.coerceAtMost(geometry.lastIndex - 1) ?: 0
+        val start = riderLat?.let { lat -> riderLng?.let { lng -> GeoPoint(lat, lng) } }
+            ?: geometry[segment]
+        return buildList(geometry.size - segment + 1) {
+            add(start)
+            for (i in (segment + 1)..geometry.lastIndex) add(geometry[i])
+        }
     }
 
     private fun updateThermal() {

@@ -282,6 +282,8 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     dest = ui.destLatLng,
                     routePoints = ui.routePoints,
                     hasLocationPermission = hasEssentialPermissions(),
+                    navMode = ui.hasRoute && ui.followMode,
+                    riderBearing = ui.riderBearing,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

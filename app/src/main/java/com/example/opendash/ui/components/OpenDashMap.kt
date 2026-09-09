@@ -36,12 +36,17 @@ import org.maplibre.android.plugins.annotation.LineManager
 import org.maplibre.android.plugins.annotation.LineOptions
 import org.maplibre.android.plugins.annotation.SymbolManager
 import org.maplibre.android.plugins.annotation.SymbolOptions
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 // Free, keyless, redistributable vector basemap (look-first, per the distribution decision).
 private const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 private const val FOLLOW_ZOOM = 15.5
-private const val NAV_ZOOM = 17.5
-private const val NAV_TILT = 45.0
+private const val NAV_ZOOM = 16.5
+private const val NAV_TILT = 55.0
+private const val NAV_LOOK_AHEAD_METERS = 115.0
 private const val RIDER_ICON = "rider-chevron"
 private const val DEST_ICON = "dest-pin"
 
@@ -146,8 +151,10 @@ private fun MapLibreOpenDashMap(
         }
     }
 
-    // Redraw route + markers whenever the data or mode changes.
-    LaunchedEffect(styleReady, routePoints.size, dest, riderLat, riderLng, riderBearing, navMode) {
+    // Redraw route + markers whenever navigation progress or mode changes. The view model
+    // supplies only the untravelled route while guiding, so the blue line starts at the rider
+    // and naturally disappears behind them.
+    LaunchedEffect(styleReady, routePoints, dest, riderLat, riderLng, riderBearing, navMode) {
         if (destroyed) return@LaunchedEffect
         val lm = lineMgr ?: return@LaunchedEffect
         val sm = symbolMgr ?: return@LaunchedEffect
@@ -162,13 +169,16 @@ private fun MapLibreOpenDashMap(
         if (navMode && riderLat != null && riderLng != null) {
             sm.create(
                 SymbolOptions().withLatLng(LatLng(riderLat, riderLng))
-                    .withIconImage(RIDER_ICON).withIconRotate(riderBearing).withIconSize(1.0f)
+                    .withIconImage(RIDER_ICON)
+                    // In heading-up mode the camera already rotates the road beneath a fixed
+                    // arrow; rotating the icon again would make it drift away from "forward".
+                    .withIconRotate(if (navMode) 0f else riderBearing).withIconSize(1.0f)
             )
         }
     }
 
     // Camera control.
-    LaunchedEffect(styleReady, riderLat, riderLng, riderBearing, navMode, fitRoute, routePoints.size) {
+    LaunchedEffect(styleReady, riderLat, riderLng, riderBearing, navMode, fitRoute, routePoints) {
         if (destroyed) return@LaunchedEffect
         val m = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
@@ -179,7 +189,15 @@ private fun MapLibreOpenDashMap(
                 runCatching { m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 110)) }
             }
             riderLat != null && riderLng != null -> {
-                val target = LatLng(riderLat, riderLng)
+                // Target a point ahead of the rider rather than the rider itself. This leaves
+                // the arrow in the lower part of the screen and exposes substantially more of
+                // the upcoming road, matching a navigation camera rather than a top-down map.
+                val target = if (navMode) {
+                    val ahead = pointAhead(riderLat, riderLng, riderBearing.toDouble(), NAV_LOOK_AHEAD_METERS)
+                    LatLng(ahead.lat, ahead.lng)
+                } else {
+                    LatLng(riderLat, riderLng)
+                }
                 val pos = if (navMode)
                     CameraPosition.Builder().target(target).zoom(NAV_ZOOM).tilt(NAV_TILT).bearing(riderBearing.toDouble()).build()
                 else
@@ -264,4 +282,18 @@ private fun destPinBitmap(): Bitmap {
     p.color = android.graphics.Color.rgb(234, 67, 53); c.drawCircle(s / 2f, s / 2f, s * 0.24f, p)
     p.color = android.graphics.Color.WHITE; c.drawCircle(s / 2f, s / 2f, s * 0.09f, p)
     return bmp
+}
+
+/** Returns the coordinate [meters] ahead along [bearingDegrees] on a spherical Earth. */
+private fun pointAhead(lat: Double, lng: Double, bearingDegrees: Double, meters: Double): GeoPoint {
+    val angularDistance = meters / 6_371_000.0
+    val bearing = Math.toRadians(bearingDegrees)
+    val lat1 = Math.toRadians(lat)
+    val lng1 = Math.toRadians(lng)
+    val lat2 = asin(sin(lat1) * cos(angularDistance) + cos(lat1) * sin(angularDistance) * cos(bearing))
+    val lng2 = lng1 + atan2(
+        sin(bearing) * sin(angularDistance) * cos(lat1),
+        cos(angularDistance) - sin(lat1) * sin(lat2),
+    )
+    return GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lng2))
 }
