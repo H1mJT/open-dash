@@ -67,6 +67,9 @@ data class DashUiState(
     val destinationName: String? = null,
     val errorMessage: String? = null,
     val mapZoom: Int = 19,
+    /** Current renderer offsets, exposed so the in-app preview can mirror the dash frame. */
+    val mapPanX: Float = 0f,
+    val mapPanY: Float = 0f,
     val remainingKm: Double? = null,
     val etaMinutes: Int? = null,
     /** Road the rider is currently travelling on, ready for direct display. */
@@ -374,6 +377,21 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        // Keep the phone's Dash view useful before a physical dash is connected. The
+        // streaming tick later replaces these with map-matched, smoothed coordinates.
+        viewModelScope.launch {
+            location.location.collect { loc ->
+                if (loc != null) _ui.update {
+                    it.copy(
+                        hasGps = true,
+                        riderLat = loc.latitude,
+                        riderLng = loc.longitude,
+                        riderBearing = loc.bearing,
+                    )
+                }
+            }
+        }
+
         session.onError = { msg -> _ui.value = _ui.value.copy(errorMessage = msg); refreshStage() }
         session.onButton = { btn ->
             val code = btn.toInt() and 0xFF
@@ -459,6 +477,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Connection ─────────────────────────────────────────────────────────
+
+    /** Starts GPS updates for the in-app dash preview without opening a dash connection. */
+    fun startDashPreview() = location.start()
+
+    /** Stops preview-only GPS updates while preserving an active dash session. */
+    fun stopDashPreview() {
+        if (!userWantsConnection) location.stop()
+    }
 
     fun connect() {
         userWantsConnection = true
@@ -804,12 +830,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Map controls ────────────────────────────────────────────────────────
 
-    fun zoomIn()  { zoom = (zoom + 1).coerceAtMost(20); _ui.value = _ui.value.copy(mapZoom = zoom) }
-    fun zoomOut() { zoom = (zoom - 1).coerceAtLeast(11); _ui.value = _ui.value.copy(mapZoom = zoom) }
+    fun zoomIn()  { zoom = (zoom + 1).coerceAtMost(20); _ui.update { it.copy(mapZoom = zoom) } }
+    fun zoomOut() { zoom = (zoom - 1).coerceAtLeast(11); _ui.update { it.copy(mapZoom = zoom) } }
     fun panBy(dx: Float, dy: Float) = manualPan(dx, dy)
     fun recenter() {
         panX = 0f; panY = 0f; followMode = true
-        _ui.value = _ui.value.copy(followMode = true)
+        _ui.update { it.copy(followMode = true, mapPanX = 0f, mapPanY = 0f) }
     }
     fun toggleHeadingUp() {
         headingUp = !headingUp
@@ -820,7 +846,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         panX += dx; panY += dy
         followMode = false
         lastManualPanAt = System.currentTimeMillis()
-        _ui.value = _ui.value.copy(followMode = false)
+        _ui.update { it.copy(followMode = false, mapPanX = panX, mapPanY = panY) }
     }
 
     // ── Video + nav loop ────────────────────────────────────────────────────
@@ -898,7 +924,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // Revert to follow mode after the rider stops nudging the joystick.
         if (!followMode && System.currentTimeMillis() - lastManualPanAt > MANUAL_IDLE_MS) {
             panX = 0f; panY = 0f; followMode = true
-            _ui.update { it.copy(followMode = true) }
+            _ui.update { it.copy(followMode = true, mapPanX = 0f, mapPanY = 0f) }
         }
 
         val loc = location.location.value
