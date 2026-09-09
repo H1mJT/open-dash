@@ -10,17 +10,17 @@ import java.net.URL
 
 /**
  * Fetches a road route from the public OSRM demo server. Called at planning time
- * (destination shared) while the phone still has internet — the result is cached
- * so riding can proceed offline. Driving profile suits the Himalayan fine.
+ * (destination shared) while the phone still has internet. It downloads OSRM's
+ * alternatives too, so a rider can continue on a previously planned option offline.
  */
 object Router {
     private const val TAG = "Router"
     private const val BASE = "https://router.project-osrm.org/route/v1/driving"
     private const val UA = "OpenDash/1.1 (personal motorcycle nav; single user)"
 
-    suspend fun route(context: Context, from: GeoPoint, to: GeoPoint): Route? = withContext(Dispatchers.IO) {
+    suspend fun route(context: Context, from: GeoPoint, to: GeoPoint, bearing: Float? = null): Route? = withContext(Dispatchers.IO) {
         val url = "$BASE/${from.lng},${from.lat};${to.lng},${to.lat}" +
-                "?overview=full&geometries=polyline&steps=true&annotations=false"
+                "?overview=full&geometries=polyline&steps=true&annotations=false&alternatives=true"
         try {
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 setRequestProperty("User-Agent", UA)
@@ -29,14 +29,16 @@ object Router {
             }
             val body = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
             conn.disconnect()
-            parse(body)?.also { RouteCache(context).save(it, to) }
+            parseRoutes(body)?.also { routes ->
+                RouteCache(context).save(routes, from, to)
+            }?.firstOrNull()
         } catch (e: Exception) {
             DebugLog.w(TAG) { "route() failed: ${e.message}" }
-            RouteCache(context).compatible(to)?.copy(isOffline = true)
+            RouteCache(context).compatible(from, to, bearing)?.copy(isOffline = true)
         }
     }
 
-    private fun parse(json: String): Route? {
+    private fun parseRoutes(json: String): List<Route>? {
         val root = JSONObject(json)
         if (root.optString("code") != "Ok") {
             DebugLog.w(TAG) { "OSRM code=${root.optString("code")}" }
@@ -44,7 +46,13 @@ object Router {
         }
         val routes = root.optJSONArray("routes") ?: return null
         if (routes.length() == 0) return null
-        val r0 = routes.getJSONObject(0)
+        return List(routes.length()) { index -> parseRoute(routes.getJSONObject(index)) }
+            .filterNotNull()
+            .take(MAX_OFFLINE_ALTERNATIVES)
+            .takeIf { it.isNotEmpty() }
+    }
+
+    private fun parseRoute(r0: JSONObject): Route? {
 
         val geometry = PolylineCodec.decode(r0.getString("geometry"))
         if (geometry.size < 2) return null
@@ -99,6 +107,8 @@ object Router {
         )
     }
 
+    private const val MAX_OFFLINE_ALTERNATIVES = 3
+
     /** OSRM has no standard prose instruction; retain all supplied route metadata and build stable text. */
     private fun buildInstruction(type: ManeuverType, road: String?): String {
         val destination = road?.takeIf { it.isNotBlank() }
@@ -145,24 +155,34 @@ object Router {
     }
 }
 
-/** Persists exactly the guidance data needed to continue an active trip offline. */
+/** Persists the planned route plus its alternates for offline continuation/rerouting. */
 private class RouteCache(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("active_route", Context.MODE_PRIVATE)
-    fun save(route: Route, destination: GeoPoint) {
+    fun save(routes: List<Route>, origin: GeoPoint, destination: GeoPoint) {
         val o = JSONObject().put("destLat", destination.lat).put("destLng", destination.lng)
-            .put("meters", route.totalMeters).put("seconds", route.totalSeconds)
-        o.put("geometry", org.json.JSONArray().apply { route.geometry.forEach { put(org.json.JSONArray().put(it.lat).put(it.lng)) } })
-        o.put("cumulative", org.json.JSONArray().apply { route.cumulative.forEach { put(it) } })
-        o.put("maneuvers", org.json.JSONArray().apply { route.maneuvers.forEach { m -> put(JSONObject().put("type", m.type.name).put("instruction", m.instruction).put("road", m.roadName).put("ref", m.roadRef).put("raw", m.rawType).put("modifier", m.modifier).put("lat", m.location.lat).put("lng", m.location.lng).put("cum", m.cumulativeMeters)) } })
+            .put("originLat", origin.lat).put("originLng", origin.lng)
+        o.put("routes", org.json.JSONArray().apply { routes.forEach { put(routeJson(it)) } })
         prefs.edit().putString("route", o.toString()).apply()
     }
-    fun compatible(destination: GeoPoint): Route? = runCatching {
+    fun compatible(origin: GeoPoint, destination: GeoPoint, bearing: Float?): Route? = runCatching {
         val o = JSONObject(prefs.getString("route", null) ?: return null)
         val cachedDest = GeoPoint(o.getDouble("destLat"), o.getDouble("destLng"))
         if (GeoPoint.distMeters(cachedDest, destination) > 500) return null
+        val cached = o.optJSONArray("routes") ?: org.json.JSONArray().put(o) // Read the pre-alternatives cache once.
+        val routes = List(cached.length()) { parseRoute(cached.getJSONObject(it)) }
+        OfflineRouteSelector.choose(routes, origin, bearing)
+    }.getOrNull()
+
+    private fun routeJson(route: Route): JSONObject = JSONObject()
+        .put("meters", route.totalMeters).put("seconds", route.totalSeconds)
+        .put("geometry", org.json.JSONArray().apply { route.geometry.forEach { put(org.json.JSONArray().put(it.lat).put(it.lng)) } })
+        .put("cumulative", org.json.JSONArray().apply { route.cumulative.forEach { put(it) } })
+        .put("maneuvers", org.json.JSONArray().apply { route.maneuvers.forEach { m -> put(JSONObject().put("type", m.type.name).put("instruction", m.instruction).put("road", m.roadName).put("ref", m.roadRef).put("raw", m.rawType).put("modifier", m.modifier).put("lat", m.location.lat).put("lng", m.location.lng).put("cum", m.cumulativeMeters)) } })
+
+    private fun parseRoute(o: JSONObject): Route {
         val g = o.getJSONArray("geometry"); val geometry = List(g.length()) { i -> g.getJSONArray(i).let { GeoPoint(it.getDouble(0), it.getDouble(1)) } }
         val c = o.getJSONArray("cumulative"); val cumulative = DoubleArray(c.length()) { c.getDouble(it) }
         val ms = o.getJSONArray("maneuvers"); val maneuvers = List(ms.length()) { i -> ms.getJSONObject(i).let { m -> Maneuver(ManeuverType.valueOf(m.getString("type")), m.getString("instruction"), m.optString("road").takeIf { it.isNotBlank() && it != "null" }, m.optString("ref").takeIf { it.isNotBlank() && it != "null" }, rawType = m.optString("raw").takeIf { it.isNotBlank() && it != "null" }, modifier = m.optString("modifier").takeIf { it.isNotBlank() && it != "null" }, location = GeoPoint(m.getDouble("lat"), m.getDouble("lng")), cumulativeMeters = m.getDouble("cum")) } }
-        Route(geometry, maneuvers, o.getDouble("meters"), o.getDouble("seconds"), cumulative, true)
-    }.getOrNull()
+        return Route(geometry, maneuvers, o.getDouble("meters"), o.getDouble("seconds"), cumulative)
+    }
 }

@@ -1031,6 +1031,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
      * Reroute when off the line for >5 s (12 s cooldown between attempts). Routes from
      * the live GPS position to the saved destination and swaps the polyline in. Needs
      * internet — available now because only the dash sockets are bound to the dash WiFi.
+     * Without it, Router selects the downloaded alternative closest to the rider's
+     * current position and heading.
      */
     private fun maybeReroute(offRoute: Boolean, loc: android.location.Location?) {
         val dLat = destLat; val dLng = destLng
@@ -1042,7 +1044,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         rerouting = true
         DebugLog.i("DashViewModel") { "Off-route ${(now - offRouteSince) / 1000}s → rerouting" }
         viewModelScope.launch {
-            val r = Router.route(getApplication(), GeoPoint(loc.latitude, loc.longitude), GeoPoint(dLat, dLng))
+            val r = Router.route(getApplication(), GeoPoint(loc.latitude, loc.longitude), GeoPoint(dLat, dLng), loc.bearing.takeIf { loc.hasBearing() })
             if (r != null) {
                 route = r
                 progressM = 0.0
