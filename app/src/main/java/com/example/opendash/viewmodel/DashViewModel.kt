@@ -145,6 +145,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var encoder: DashEncoder? = null
     private var streamJob: Job? = null
     private var mediaObserveJob: Job? = null
+    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
+    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     private var userWantsConnection = false
 
@@ -248,8 +250,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var fixWallMs = 0L
     private var lastFixTime = 0L
     @Volatile private var gpsStatus = GpsStatus.LOST
-    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
-    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     // Smoothed rider position shown on the dash frame (locked to the camera centre so the
     // marker stays put and the map slides under it). null = no GPS.
