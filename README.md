@@ -9,6 +9,7 @@ It renders its own dash view off-screen, encodes it as H.264, and streams it ove
 ## ✨ Features
 
 - 🧭 Bike dash navigation with OSRM routing, MapLibre/OpenFreeMap preview, ETA, remaining distance, GPS status, and off-route recalculation.
+- 🗺️ Select the built-in OpenFreeMap view or Google Maps Embed with your own API key (stored encrypted on-device).
 - 📲 Share destinations from Google Maps directly into OpenDash.
 - 🏍️ Vehicle profiles with active-vehicle selection, odometer, PUC/insurance dates, and service details.
 - 🧰 Garage with spare-part intervals, service history, odometer editing, and mileage from fuel fill-ups.
@@ -84,6 +85,7 @@ Release signing uses your own keystore through Gradle properties or CI secrets. 
 - Wallpaper media stays in app-private storage.
 - Expense exports are created locally and shared only when you choose to share them.
 - Firebase/Google sync is optional and bring-your-own-project.
+- A Google Maps key, if configured, stays encrypted on the device and is only sent to Google Maps Embed while that provider is selected.
 - Release builds avoid logging full URLs, coordinates, media titles, or caller names.
 
 ## ⚠️ Notes

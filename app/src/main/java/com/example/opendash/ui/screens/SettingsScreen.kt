@@ -73,6 +73,7 @@ private enum class MorePage(val title: String) {
     ROOT("More"),
     SETTINGS("Settings"),
     ABOUT("About"),
+    MAP_PROVIDER("Map provider"),
     HELP("Help"),
     TERMS("Terms & Conditions"),
     LICENSE("License"),
@@ -177,6 +178,10 @@ fun SettingsScreen(
     var page by remember { mutableStateOf(MorePage.ROOT) }
     BackHandler(enabled = page != MorePage.ROOT) { page = MorePage.ROOT }
 
+    if (page == MorePage.MAP_PROVIDER) {
+        MapProviderSettingsPage(onBack = { page = MorePage.SETTINGS })
+        return
+    }
     if (page != MorePage.ROOT && page != MorePage.SETTINGS) {
         MoreInformationPage(page = page, onBack = { page = MorePage.ROOT })
         return
@@ -235,6 +240,8 @@ fun SettingsScreen(
             SectionLabel("General")
             SettingsGroup(padding = 6.dp) {
                 MoreRow(OpenDashIcons.Gear, "Settings", "Connection, ride, wallpaper, voice, units", onClick = { page = MorePage.SETTINGS })
+                SettingsDivider(Modifier.padding(horizontal = 6.dp))
+                MoreRow(OpenDashIcons.Navi, "Map provider", "OpenFreeMap or Google Maps", onClick = { page = MorePage.MAP_PROVIDER })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
                 MoreRow(OpenDashIcons.Dash, "About", "OpenDash v${BuildConfig.VERSION_NAME}", onClick = { page = MorePage.ABOUT })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
@@ -617,6 +624,18 @@ fun SettingsScreen(
                     else       -> com.example.opendash.dash.nav.VoiceMode.CHIME
                 })
             }, Modifier.fillMaxWidth())
+        }
+
+        SectionLabel("Map provider")
+        SettingsGroup(padding = 6.dp) {
+            SettingRow(
+                OpenDashIcons.Navi,
+                "Map provider",
+                "Choose OpenFreeMap or Google Maps",
+                control = { Icon(OpenDashIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) },
+                last = true,
+                onClick = { page = MorePage.MAP_PROVIDER },
+            )
         }
 
         SectionLabel("Units")

@@ -217,13 +217,14 @@ object DashCommands {
     // ── Active navigation info (0x007E-family, ~1 Hz while guiding) ───────
     // Ported from better-dash build_active_nav_packet. Drives the dash's
     // instruction bubble: primary maneuver glyph + distance-to-turn + total.
-    const val NAV_MANEUVER_CONTINUE = 0x0B
+    /** Straight/continue glyph. 0x0B is the roundabout glyph, not a fallback. */
+    const val NAV_MANEUVER_CONTINUE = 0x00
     const val NAV_UNIT_KM_TENTHS = 0x10   // distance field = km × 10
     const val NAV_UNIT_METERS    = 0x30
     private const val NAV_HDR = "00000000020100054B31472000"
 
     /**
-     * @param maneuver  dash glyph code (0x0B = continue; others unverified)
+     * @param maneuver  dash maneuver glyph code
      * @param primaryDistM  distance to next turn (metres if [primaryUnit]=METERS,
      *                      or km×10 if KM_TENTHS)
      * @param totalDistM    remaining distance, same unit convention via [totalUnit]

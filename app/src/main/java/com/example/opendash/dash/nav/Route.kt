@@ -1,8 +1,6 @@
 package com.example.opendash.dash.nav
 
-/** Maneuver glyphs the dash understands. Only CONTINUE (0x0B) is hardware-verified;
- *  the rest are best-effort guesses and must be checked on fw 11.63. Until then
- *  [Maneuver.dashCode] falls back to CONTINUE so the dash never shows a wrong arrow. */
+/** Maneuver glyphs understood by the dash navigation widget. */
 enum class ManeuverType { CONTINUE, TURN_LEFT, TURN_RIGHT, SLIGHT_LEFT, SLIGHT_RIGHT,
     SHARP_LEFT, SHARP_RIGHT, UTURN, ROUNDABOUT, DEPART, ARRIVE;
 
@@ -36,8 +34,23 @@ data class Maneuver(
     /** Cumulative distance (m) from the route start to this maneuver's location. */
     val cumulativeMeters: Double,
 ) {
-    /** Dash maneuver glyph byte. CONTINUE (0x0B) is the only verified value. */
-    val dashCode: Int get() = 0x0B // TODO: verify other glyph codes on fw 11.63
+    /**
+     * Dash maneuver glyph byte. 0x0B is the roundabout glyph, so it must never be
+     * used as the generic fallback: doing so makes every upcoming instruction look
+     * like a roundabout exit. The other codes are the directional glyph family used
+     * by the dash's navigation widget.
+     */
+    val dashCode: Int get() = when (type) {
+        ManeuverType.CONTINUE, ManeuverType.DEPART, ManeuverType.ARRIVE -> 0x00
+        ManeuverType.SLIGHT_RIGHT -> 0x01
+        ManeuverType.TURN_RIGHT   -> 0x02
+        ManeuverType.SHARP_RIGHT  -> 0x03
+        ManeuverType.UTURN        -> 0x04
+        ManeuverType.SHARP_LEFT   -> 0x05
+        ManeuverType.TURN_LEFT    -> 0x06
+        ManeuverType.SLIGHT_LEFT  -> 0x07
+        ManeuverType.ROUNDABOUT   -> 0x0B
+    }
 }
 
 /** A computed road route from origin to destination. */
