@@ -27,6 +27,7 @@ import com.example.opendash.dash.map.Mercator
 import com.example.opendash.dash.map.TileProvider
 import com.example.opendash.dash.nav.GeoPoint
 import com.example.opendash.dash.nav.NavEngine
+import com.example.opendash.dash.nav.ManeuverType
 import com.example.opendash.dash.nav.Route
 import com.example.opendash.dash.nav.Router
 import com.example.opendash.dash.protocol.DashCommands
@@ -66,6 +67,9 @@ data class DashUiState(
     val destinationName: String? = null,
     val errorMessage: String? = null,
     val mapZoom: Int = 19,
+    /** Current renderer offsets, exposed so the in-app preview can mirror the dash frame. */
+    val mapPanX: Float = 0f,
+    val mapPanY: Float = 0f,
     val remainingKm: Double? = null,
     val etaMinutes: Int? = null,
     /** Road the rider is currently travelling on, ready for direct display. */
@@ -92,6 +96,7 @@ data class DashUiState(
     val riderLat: Double? = null,
     val riderLng: Double? = null,
     val riderBearing: Float = 0f,
+    val riderSpeedKph: Float = 0f,
     val destLatLng: Pair<Double, Double>? = null,
     val routePoints: List<GeoPoint> = emptyList(),
     val wallpaperPath: String? = null,
@@ -112,6 +117,8 @@ data class DashUiState(
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
     /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
     val turnSymbolTestCode: Int? = null,
+    /** Result chosen by the rider for each tested native navigation glyph. */
+    val turnSymbolMappings: Map<Int, ManeuverType> = emptyMap(),
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -145,6 +152,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var encoder: DashEncoder? = null
     private var streamJob: Job? = null
     private var mediaObserveJob: Job? = null
+    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
+    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     private var userWantsConnection = false
 
@@ -156,6 +165,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             navigationTiltEnabled = dashConfig.navigationTiltEnabled,
             streamFps = dashConfig.streamFps,
             streamBitrateKbps = dashConfig.streamBitrateKbps,
+            turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, code) -> code to type },
         )
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
@@ -217,7 +227,15 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopTurnSymbolTest() {
         _ui.update { it.copy(turnSymbolTestCode = null) }
-        session.clearNavInfo()
+        session.clearNavInfo(hasLiveRoute = route != null)
+    }
+
+    /** Saves the rider's result for a calibration glyph; null means the glyph displayed nothing. */
+    fun setTurnSymbolMapping(code: Int, maneuver: ManeuverType?) {
+        dashConfig.setManeuverGlyph(code, maneuver)
+        _ui.update {
+            it.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        }
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -248,8 +266,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var fixWallMs = 0L
     private var lastFixTime = 0L
     @Volatile private var gpsStatus = GpsStatus.LOST
-    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
-    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     // Smoothed rider position shown on the dash frame (locked to the camera centre so the
     // marker stays put and the map slides under it). null = no GPS.
@@ -362,6 +378,22 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        // Keep the phone's Dash view useful before a physical dash is connected. The
+        // streaming tick later replaces these with map-matched, smoothed coordinates.
+        viewModelScope.launch {
+            location.location.collect { loc ->
+                if (loc != null) _ui.update {
+                    it.copy(
+                        hasGps = true,
+                        riderLat = loc.latitude,
+                        riderLng = loc.longitude,
+                        riderBearing = loc.bearing,
+                        riderSpeedKph = loc.speed * 3.6f,
+                    )
+                }
+            }
+        }
+
         session.onError = { msg -> _ui.value = _ui.value.copy(errorMessage = msg); refreshStage() }
         session.onButton = { btn ->
             val code = btn.toInt() and 0xFF
@@ -447,6 +479,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Connection ─────────────────────────────────────────────────────────
+
+    /** Starts GPS updates for the in-app dash preview without opening a dash connection. */
+    fun startDashPreview() = location.start()
+
+    /** Stops preview-only GPS updates while preserving an active dash session. */
+    fun stopDashPreview() {
+        if (!userWantsConnection) location.stop()
+    }
 
     fun connect() {
         userWantsConnection = true
@@ -792,12 +832,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Map controls ────────────────────────────────────────────────────────
 
-    fun zoomIn()  { zoom = (zoom + 1).coerceAtMost(20); _ui.value = _ui.value.copy(mapZoom = zoom) }
-    fun zoomOut() { zoom = (zoom - 1).coerceAtLeast(11); _ui.value = _ui.value.copy(mapZoom = zoom) }
+    fun zoomIn()  { zoom = (zoom + 1).coerceAtMost(20); _ui.update { it.copy(mapZoom = zoom) } }
+    fun zoomOut() { zoom = (zoom - 1).coerceAtLeast(11); _ui.update { it.copy(mapZoom = zoom) } }
     fun panBy(dx: Float, dy: Float) = manualPan(dx, dy)
     fun recenter() {
         panX = 0f; panY = 0f; followMode = true
-        _ui.value = _ui.value.copy(followMode = true)
+        _ui.update { it.copy(followMode = true, mapPanX = 0f, mapPanY = 0f) }
     }
     fun toggleHeadingUp() {
         headingUp = !headingUp
@@ -808,7 +848,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         panX += dx; panY += dy
         followMode = false
         lastManualPanAt = System.currentTimeMillis()
-        _ui.value = _ui.value.copy(followMode = false)
+        _ui.update { it.copy(followMode = false, mapPanX = panX, mapPanY = panY) }
     }
 
     // ── Video + nav loop ────────────────────────────────────────────────────
@@ -886,7 +926,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // Revert to follow mode after the rider stops nudging the joystick.
         if (!followMode && System.currentTimeMillis() - lastManualPanAt > MANUAL_IDLE_MS) {
             panX = 0f; panY = 0f; followMode = true
-            _ui.value = _ui.value.copy(followMode = true)
+            _ui.update { it.copy(followMode = true, mapPanX = 0f, mapPanY = 0f) }
         }
 
         val loc = location.location.value
@@ -949,13 +989,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             // real route distances and ETA so the dash stays in its navigation view.
             val testGlyph = _ui.value.turnSymbolTestCode
             session.updateNavInfo(
-                testGlyph ?: ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                testGlyph ?: ns.currentManeuver?.type?.let(dashConfig::maneuverGlyphCode) ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
-                secondaryManeuver = testGlyph ?: ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                secondaryManeuver = testGlyph ?: ns.nextManeuver?.type?.let(dashConfig::maneuverGlyphCode) ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
             voice.maybeAnnounce(ns.currentManeuver, ns.nextTurnM, ns.remainingM)
@@ -985,28 +1025,31 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             "Arrive " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(it))
         }
         val guidance = navState
-        _ui.value = _ui.value.copy(
-            hasGps = loc != null,
-            gpsStatus = gpsStatus,
-            riderLat = matchedLat,
-            riderLng = matchedLng,
-            riderBearing = heading,
-            // Keep the phone map's blue line in sync with navigation progress instead of
-            // continuing to show the completed part of the original route.
-            routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
-            remainingKm = remainingM?.let { it / 1000.0 },
-            etaMinutes = etaSec?.let { (it / 60.0).toInt() },
-            roadName = if (!rerouting) guidance?.roadName ?: _ui.value.roadName else _ui.value.roadName,
-            currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.currentManeuver else _ui.value.currentManeuver,
-            // Only retain preview data during an active reroute. A normal exhausted
-            // preview must disappear instead of duplicating the prior instruction.
-            nextManeuver = if (rerouting) _ui.value.nextManeuver else guidance?.nextManeuver?.instruction,
-            nextManeuverDistance = if (rerouting) _ui.value.nextManeuverDistance else guidance?.nextManeuverDistanceM?.let(::fmtDist),
-            rerouting = rerouting,
-            arrivalTime = arrivalTime ?: _ui.value.arrivalTime,
-            maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.maneuver else _ui.value.maneuver,
-            offRoute = offRoute,
-        )
+        _ui.update { current ->
+            current.copy(
+                hasGps = loc != null,
+                gpsStatus = gpsStatus,
+                riderLat = matchedLat,
+                riderLng = matchedLng,
+                riderBearing = heading,
+                riderSpeedKph = (loc?.speed ?: 0f) * 3.6f,
+                // Keep the phone map's blue line in sync with navigation progress instead of
+                // continuing to show the completed part of the original route.
+                routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
+                remainingKm = remainingM?.let { it / 1000.0 },
+                etaMinutes = etaSec?.let { (it / 60.0).toInt() },
+                roadName = if (!rerouting) guidance?.roadName ?: current.roadName else current.roadName,
+                currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.currentManeuver else current.currentManeuver,
+                // Only retain preview data during an active reroute. A normal exhausted
+                // preview must disappear instead of duplicating the prior instruction.
+                nextManeuver = if (rerouting) current.nextManeuver else guidance?.nextManeuver?.instruction,
+                nextManeuverDistance = if (rerouting) current.nextManeuverDistance else guidance?.nextManeuverDistanceM?.let(::fmtDist),
+                rerouting = rerouting,
+                arrivalTime = arrivalTime ?: current.arrivalTime,
+                maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.maneuver else current.maneuver,
+                offRoute = offRoute,
+            )
+        }
 
         updateThermal()
 
@@ -1324,7 +1367,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             PowerManager.THERMAL_STATUS_SEVERE, PowerManager.THERMAL_STATUS_CRITICAL -> "Hot"
             else -> "Throttling"
         }
-        if (label != _ui.value.thermal) _ui.value = _ui.value.copy(thermal = label)
+        _ui.update { current -> if (label == current.thermal) current else current.copy(thermal = label) }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

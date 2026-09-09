@@ -7,6 +7,11 @@ import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.graphics.Path
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -24,6 +29,7 @@ import com.example.opendash.data.MapProviderSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.opendash.dash.nav.GeoPoint
+import com.example.opendash.dash.map.Mercator
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -47,6 +53,7 @@ private const val FOLLOW_ZOOM = 15.5
 private const val NAV_ZOOM = 16.5
 private const val NAV_TILT = 55.0
 private const val NAV_LOOK_AHEAD_METERS = 115.0
+private const val MOVEMENT_HEADING_THRESHOLD_KPH = 10f
 private const val RIDER_ICON = "rider-chevron"
 private const val DEST_ICON = "dest-pin"
 
@@ -68,6 +75,13 @@ fun OpenDashMap(
     fitRoute: Boolean = false,
     navMode: Boolean = false,
     riderBearing: Float = 0f,
+    riderSpeedKph: Float = 0f,
+    /** Whether the in-app navigation preview uses the same perspective tilt as the dash. */
+    navigationTiltEnabled: Boolean = true,
+    /** Dash renderer camera values, used by the in-app preview when its controls are used. */
+    dashZoom: Int? = null,
+    dashPanX: Float = 0f,
+    dashPanY: Float = 0f,
 ) {
     val provider by MapProviderSettings.provider.collectAsState()
     val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
@@ -79,7 +93,10 @@ fun OpenDashMap(
             modifier = modifier,
         )
     } else {
-        MapLibreOpenDashMap(riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode, riderBearing, modifier)
+        MapLibreOpenDashMap(
+            riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode,
+            riderBearing, riderSpeedKph, navigationTiltEnabled, dashZoom, dashPanX, dashPanY, modifier,
+        )
     }
 }
 
@@ -93,11 +110,22 @@ private fun MapLibreOpenDashMap(
     fitRoute: Boolean,
     navMode: Boolean,
     riderBearing: Float,
+    riderSpeedKph: Float,
+    navigationTiltEnabled: Boolean,
+    dashZoom: Int?,
+    dashPanX: Float,
+    dashPanY: Float,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
     remember { MapLibre.getInstance(context) }
     val mapView = remember { MapView(context) }
+    val phoneHeading = rememberPhoneHeading()
+    // At riding speed, GPS/map-matched bearing is more trustworthy than a phone that may
+    // be tilted in its mount. Below that speed, use the compass like Google Maps does.
+    val cameraBearing = if (navMode && riderSpeedKph < MOVEMENT_HEADING_THRESHOLD_KPH)
+        phoneHeading ?: riderBearing
+    else riderBearing
 
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var lineMgr by remember { mutableStateOf<LineManager?>(null) }
@@ -154,7 +182,7 @@ private fun MapLibreOpenDashMap(
     // Redraw route + markers whenever navigation progress or mode changes. The view model
     // supplies only the untravelled route while guiding, so the blue line starts at the rider
     // and naturally disappears behind them.
-    LaunchedEffect(styleReady, routePoints, dest, riderLat, riderLng, riderBearing, navMode) {
+    LaunchedEffect(styleReady, routePoints, dest, riderLat, riderLng, cameraBearing, navMode) {
         if (destroyed) return@LaunchedEffect
         val lm = lineMgr ?: return@LaunchedEffect
         val sm = symbolMgr ?: return@LaunchedEffect
@@ -172,13 +200,13 @@ private fun MapLibreOpenDashMap(
                     .withIconImage(RIDER_ICON)
                     // In heading-up mode the camera already rotates the road beneath a fixed
                     // arrow; rotating the icon again would make it drift away from "forward".
-                    .withIconRotate(if (navMode) 0f else riderBearing).withIconSize(1.0f)
+                    .withIconRotate(if (navMode) 0f else cameraBearing).withIconSize(1.0f)
             )
         }
     }
 
     // Camera control.
-    LaunchedEffect(styleReady, riderLat, riderLng, riderBearing, navMode, fitRoute, routePoints) {
+    LaunchedEffect(styleReady, riderLat, riderLng, cameraBearing, navMode, navigationTiltEnabled, fitRoute, routePoints, dashZoom, dashPanX, dashPanY) {
         if (destroyed) return@LaunchedEffect
         val m = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
@@ -193,15 +221,25 @@ private fun MapLibreOpenDashMap(
                 // the arrow in the lower part of the screen and exposes substantially more of
                 // the upcoming road, matching a navigation camera rather than a top-down map.
                 val target = if (navMode) {
-                    val ahead = pointAhead(riderLat, riderLng, riderBearing.toDouble(), NAV_LOOK_AHEAD_METERS)
+                    val ahead = pointAhead(riderLat, riderLng, cameraBearing.toDouble(), NAV_LOOK_AHEAD_METERS)
                     LatLng(ahead.lat, ahead.lng)
                 } else {
                     LatLng(riderLat, riderLng)
                 }
+                // The physical dash uses Web-Mercator tile pixels for pan. Transform the
+                // same pixel offsets into a geographic camera target for this preview.
+                val dashTarget = dashZoom?.let { zoom ->
+                    val tileX = Mercator.lngToTileX(target.longitude, zoom) + dashPanX / Mercator.TILE_SIZE
+                    val tileY = Mercator.latToTileY(target.latitude, zoom) + dashPanY / Mercator.TILE_SIZE
+                    LatLng(Mercator.tileYToLat(tileY, zoom), Mercator.tileXToLng(tileX, zoom))
+                } ?: target
+                val previewZoom = dashZoom?.toDouble() ?: if (navMode) NAV_ZOOM else FOLLOW_ZOOM
                 val pos = if (navMode)
-                    CameraPosition.Builder().target(target).zoom(NAV_ZOOM).tilt(NAV_TILT).bearing(riderBearing.toDouble()).build()
+                    CameraPosition.Builder().target(dashTarget).zoom(previewZoom)
+                        .tilt(if (navigationTiltEnabled) NAV_TILT else 0.0)
+                        .bearing(cameraBearing.toDouble()).build()
                 else
-                    CameraPosition.Builder().target(target).zoom(FOLLOW_ZOOM).tilt(0.0).bearing(0.0).build()
+                    CameraPosition.Builder().target(dashTarget).zoom(previewZoom).tilt(0.0).bearing(0.0).build()
                 runCatching { m.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 600) }
             }
             dest != null -> runCatching {
@@ -212,6 +250,38 @@ private fun MapLibreOpenDashMap(
 
     AndroidView(factory = { mapView }, modifier = modifier)
 }
+
+/** Current compass heading of the phone, or null on devices without a rotation-vector sensor. */
+@Composable
+private fun rememberPhoneHeading(): Float? {
+    val context = LocalContext.current
+    var heading by remember { mutableStateOf<Float?>(null) }
+    DisposableEffect(context) {
+        val sensors = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val matrix = FloatArray(9)
+                val orientation = FloatArray(3)
+                SensorManager.getRotationMatrixFromVector(matrix, event.values)
+                SensorManager.getOrientation(matrix, orientation)
+                val next = ((Math.toDegrees(orientation[0].toDouble()) + 360.0) % 360.0).toFloat()
+                val current = heading
+                // Ignore imperceptible compass noise so we do not constantly restart the
+                // camera animation while the phone is resting in its mount.
+                if (current == null || headingDifference(current, next) >= 2f) heading = next
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        if (rotationSensor != null) sensors.registerListener(listener, rotationSensor, SensorManager.SENSOR_DELAY_UI)
+        onDispose { sensors.unregisterListener(listener) }
+    }
+    return heading
+}
+
+private fun headingDifference(first: Float, second: Float): Float =
+    kotlin.math.abs(((first - second + 540f) % 360f) - 180f)
 
 @Composable
 private fun GoogleMapsEmbed(

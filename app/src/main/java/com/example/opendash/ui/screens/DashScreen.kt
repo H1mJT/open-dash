@@ -41,6 +41,12 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
 
+    // Keep the in-app dash preview live even before the rider connects to a physical dash.
+    DisposableEffect(vm) {
+        vm.startDashPreview()
+        onDispose(vm::stopDashPreview)
+    }
+
     // WiFi network request (13+: NEARBY_WIFI_DEVICES) + GPS for the map
     // Essential perms gate the connection; notifications are requested but optional.
     val essentialPermissions = remember {
@@ -296,6 +302,11 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     hasLocationPermission = hasEssentialPermissions(),
                     navMode = ui.hasRoute && ui.followMode,
                     riderBearing = ui.riderBearing,
+                    riderSpeedKph = ui.riderSpeedKph,
+                    navigationTiltEnabled = ui.navigationTiltEnabled,
+                    dashZoom = ui.mapZoom,
+                    dashPanX = ui.mapPanX,
+                    dashPanY = ui.mapPanY,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

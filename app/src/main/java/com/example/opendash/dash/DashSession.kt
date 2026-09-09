@@ -97,9 +97,15 @@ class DashSession(private val scope: CoroutineScope) {
      * Hide native navigation chrome when it is only being used for a maneuver-glyph
      * calibration session. A live route will repopulate it on its next navigation tick.
      */
-    fun clearNavInfo() {
+    fun clearNavInfo(hasLiveRoute: Boolean) {
         navActive = false
         navChromeEnabled = false
+        // A calibration can enter the dash's native navigation chrome without a route
+        // card. Explicitly return to the idle projection sequence when it ends; a live
+        // route will publish its next nav update instead.
+        if (!hasLiveRoute && (_state.value == DashState.READY || _state.value == DashState.STREAMING)) {
+            restoreIdleProjection()
+        }
     }
 
     /**
@@ -151,15 +157,19 @@ class DashSession(private val scope: CoroutineScope) {
                 socket?.send(liveRouteCard(projectionOn = true))
             }
         } else if (_state.value == DashState.READY || _state.value == DashState.STREAMING) {
-            scope.launch(Dispatchers.IO) {
-                socket?.send(DashCommands.projectionStop())
-                delay(40)
-                socket?.send(DashCommands.projectionOff())
-                delay(40)
-                socket?.send(DashCommands.projectionFrame())
-                delay(40)
-                socket?.send(DashCommands.projectionOn())
-            }
+            restoreIdleProjection()
+        }
+    }
+
+    private fun restoreIdleProjection() {
+        scope.launch(Dispatchers.IO) {
+            socket?.send(DashCommands.projectionStop())
+            delay(40)
+            socket?.send(DashCommands.projectionOff())
+            delay(40)
+            socket?.send(DashCommands.projectionFrame())
+            delay(40)
+            socket?.send(DashCommands.projectionOn())
         }
     }
 
