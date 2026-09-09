@@ -291,23 +291,41 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
 
         Spacer(Modifier.height(14.dp))
 
-        // Next-turn banner (real turn-by-turn from the routing engine)
-        ui.maneuver?.let { mv ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+        // Guidance hierarchy mirrors the dash frame. The text next to the icon is also
+        // the accessible alternative: a rider never has to infer a maneuver from a glyph.
+        if (ui.rerouting || ui.currentManeuver != null) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(13.dp))
-                    .background(if (ui.offRoute) Color(0x33D8853E) else GoldTint)
-                    .border(1.dp, if (ui.offRoute) Warn else GoldTint2, RoundedCornerShape(13.dp))
+                    .background(if (ui.rerouting) Color(0xFF8E161C) else GoldTint)
+                    .border(1.dp, if (ui.rerouting) Color(0xFFFFD7D9) else GoldTint2, RoundedCornerShape(13.dp))
                     .padding(horizontal = 14.dp, vertical = 11.dp),
             ) {
-                Icon(OpenDashIcons.Navi, null, tint = if (ui.offRoute) Warn else Gold, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(11.dp))
-                Text(
-                    if (ui.offRoute) "Off route — rerouting…" else mv,
-                    color = TextHi, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
-                )
+                if (ui.rerouting) {
+                    Text("Off route — recalculating", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("Keeping the last instruction until the new route is ready.", color = Color.White, fontSize = 11.5.sp, modifier = Modifier.padding(top = 3.dp))
+                } else {
+                    ui.roadName?.let { Text(it, color = TextMid, fontSize = 11.5.sp) }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = if (ui.roadName != null) 3.dp else 0.dp)) {
+                        Icon(
+                            OpenDashIcons.Navi,
+                            contentDescription = "Maneuver: ${ui.currentManeuver}",
+                            tint = Gold,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(11.dp))
+                        Text(ui.currentManeuver.orEmpty(), color = TextHi, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    ui.nextManeuver?.let { next ->
+                        Text(
+                            listOfNotNull(ui.nextManeuverDistance, next).joinToString(" · ", prefix = "Then "),
+                            color = TextMid,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 7.dp),
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(10.dp))
         }
@@ -319,7 +337,7 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     ui.remainingKm?.let { if (it >= 10) "%.0f".format(it) else "%.1f".format(it) } ?: "—",
                     if (ui.remainingKm != null) "km" else "", "Remaining",
                 ),
-                Triple(ui.etaMinutes?.toString() ?: "—", if (ui.etaMinutes != null) "min" else "", "ETA"),
+                Triple(ui.arrivalTime ?: ui.etaMinutes?.let { "$it min" } ?: "—", "", "Arrival"),
                 Triple("z${ui.mapZoom}", "", "Zoom"),
             ).forEach { (v, u, k) ->
                 Column(

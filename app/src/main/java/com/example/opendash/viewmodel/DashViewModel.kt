@@ -53,6 +53,18 @@ data class DashUiState(
     val mapZoom: Int = 19,
     val remainingKm: Double? = null,
     val etaMinutes: Int? = null,
+    /** Road the rider is currently travelling on, ready for direct display. */
+    val roadName: String? = null,
+    /** The imminent meaningful instruction, including its distance. */
+    val currentManeuver: String? = null,
+    /** The following meaningful instruction, for the two-step preview. */
+    val nextManeuver: String? = null,
+    val nextManeuverDistance: String? = null,
+    /** True only after a replacement route request has actually started. */
+    val rerouting: Boolean = false,
+    /** Stable, localized arrival-clock text, e.g. “Arrive 6:42 PM”. */
+    val arrivalTime: String? = null,
+    // Legacy single-line field retained for existing callers.
     val maneuver: String? = null,
     val hasGps: Boolean = false,
     val gpsStatus: GpsStatus = GpsStatus.LOST,
@@ -564,6 +576,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             destinationName = name, hasRoute = false,
             destLatLng = if (lat != null && lng != null) lat to lng else null,
             routePoints = emptyList(),
+            roadName = null,
+            currentManeuver = null,
+            nextManeuver = null,
+            nextManeuverDistance = null,
+            rerouting = false,
+            arrivalTime = null,
+            maneuver = null,
+            offRoute = false,
         )
         destLat = lat
         destLng = lng
@@ -597,6 +617,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             routePoints = emptyList(),
             remainingKm = null,
             etaMinutes = null,
+            roadName = null,
+            currentManeuver = null,
+            nextManeuver = null,
+            nextManeuverDistance = null,
+            rerouting = false,
+            arrivalTime = null,
             maneuver = null,
             offRoute = false,
             followMode = true,
@@ -736,9 +762,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // Keep the last heading on GPS dropout (tunnels) — don't snap the map to north.
         var heading = loc?.bearing ?: (if (camInit) camHdg else 0f)
         var offRoute = false
+        var navState: NavState? = null
 
         if (r != null && loc != null) {
             val ns = trackProgress(r, GeoPoint(loc.latitude, loc.longitude))
+            navState = ns
             remainingM = ns.remainingM
             val headingKnown = loc.hasBearing() && loc.speed >= 1.5f
             val headingOff = headingKnown && angleDelta(loc.bearing, ns.heading) > 50f
@@ -801,7 +829,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             else -> GpsStatus.GOOD
         }
 
-        // Publish nav figures to the phone UI.
+        // Publish display-ready guidance. Once a reroute starts, deliberately retain the
+        // last reliable instruction until the replacement route is ready.
+        val arrivalTime = etaArrivalMs.takeIf { it > 0L }?.let {
+            "Arrive " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(it))
+        }
+        val guidance = navState
         _ui.value = _ui.value.copy(
             hasGps = loc != null,
             gpsStatus = gpsStatus,
@@ -813,7 +846,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
             remainingKm = remainingM?.let { it / 1000.0 },
             etaMinutes = etaSec?.let { (it / 60.0).toInt() },
-            maneuver = null,
+            roadName = if (!rerouting) guidance?.roadName ?: _ui.value.roadName else _ui.value.roadName,
+            currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.currentManeuver else _ui.value.currentManeuver,
+            nextManeuver = if (!rerouting) guidance?.nextManeuver?.instruction ?: _ui.value.nextManeuver else _ui.value.nextManeuver,
+            nextManeuverDistance = if (!rerouting) guidance?.nextManeuverDistanceM?.let(::fmtDist) ?: _ui.value.nextManeuverDistance else _ui.value.nextManeuverDistance,
+            rerouting = rerouting,
+            arrivalTime = arrivalTime ?: _ui.value.arrivalTime,
+            maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.maneuver else _ui.value.maneuver,
             offRoute = offRoute,
         )
 
@@ -975,7 +1014,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             destLng = destLng,
             destName = _ui.value.destinationName,
             route = route?.geometry ?: emptyList(),
-            maneuverText = null, // turn-by-turn maneuver banner removed
+            roadName = _ui.value.roadName,
+            currentManeuver = _ui.value.currentManeuver,
+            nextManeuver = _ui.value.nextManeuver,
+            nextManeuverDistance = _ui.value.nextManeuverDistance,
+            rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
             // Top-down (heading-up) nav view. The 3D perspective tilt is DISABLED: warping
             // flat raster tiles via setPolyToPoly stretches the baked-in map labels and
@@ -1042,7 +1085,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private data class NavState(
         val remainingM: Double, val nextTurnM: Double, val heading: Float, val offRoute: Boolean,
         val snapped: GeoPoint, val snapDist: Double,
+        val currentManeuver: com.example.opendash.dash.nav.Maneuver?,
         val nextManeuver: com.example.opendash.dash.nav.Maneuver?,
+        val nextManeuverDistanceM: Double?,
+        val roadName: String?,
     )
 
     private data class Match(val cum: Double, val dist: Double, val bearing: Float, val proj: GeoPoint)
@@ -1075,11 +1121,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         progressM = maxOf(progressM - 25.0, m.cum) // mostly forward, tolerate small GPS slide
 
         val remaining = (r.totalMeters - progressM).coerceAtLeast(0.0)
-        val nextMan = r.maneuvers.firstOrNull {
-            it.cumulativeMeters > progressM + 1.0 && it.type != com.example.opendash.dash.nav.ManeuverType.DEPART
-        }
-        val nextTurn = nextMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) } ?: remaining
-        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, nextMan)
+        val meaningful = r.maneuvers.filter { it.isMeaningful }
+        val currentMan = meaningful.firstOrNull { it.cumulativeMeters > progressM + 1.0 }
+        val nextMan = currentMan?.let { current -> meaningful.firstOrNull { it.cumulativeMeters > current.cumulativeMeters + 1.0 } }
+        val nextTurn = currentMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) } ?: remaining
+        val nextDistance = nextMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) }
+        val road = r.maneuvers.lastOrNull { it.cumulativeMeters <= progressM + 1.0 }
+            ?.displayRoadName ?: currentMan?.displayRoadName
+        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, currentMan, nextMan, nextDistance, road)
     }
 
     /** Route segment from the current rider position through the destination. */

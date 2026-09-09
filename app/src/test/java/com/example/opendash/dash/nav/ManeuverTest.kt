@@ -13,6 +13,14 @@ class ManeuverTest {
     )
 
     @Test
+    fun `depart and continue are omitted from the meaningful maneuver preview`() {
+        assertEquals(false, maneuver(ManeuverType.DEPART).isMeaningful)
+        assertEquals(false, maneuver(ManeuverType.CONTINUE).isMeaningful)
+        assertEquals(true, maneuver(ManeuverType.TURN_LEFT).isMeaningful)
+        assertEquals(true, maneuver(ManeuverType.ARRIVE).isMeaningful)
+    }
+
+    @Test
     fun `directional maneuvers use their own dashboard glyphs`() {
         assertEquals(0x06, maneuver(ManeuverType.TURN_LEFT).dashCode)
         assertEquals(0x02, maneuver(ManeuverType.TURN_RIGHT).dashCode)
