@@ -329,8 +329,7 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     Text("Off route — recalculating", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Text("Keeping the last instruction until the new route is ready.", color = Color.White, fontSize = 11.5.sp, modifier = Modifier.padding(top = 3.dp))
                 } else {
-                    ui.roadName?.let { Text(it, color = TextMid, fontSize = 11.5.sp) }
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = if (ui.roadName != null) 3.dp else 0.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             OpenDashIcons.Navi,
                             contentDescription = "Maneuver: ${ui.currentManeuver}",

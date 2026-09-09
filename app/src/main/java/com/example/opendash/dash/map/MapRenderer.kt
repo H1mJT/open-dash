@@ -211,16 +211,15 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate) canvas.restore()
 
-        // ── Guidance hierarchy (screen space: road, imminent turn, then next turn) ──
+        // ── Guidance hierarchy (screen space: imminent turn, then next turn) ──
         if (f.rerouting) {
             tmpRect.set(24f, 14f, w - 24f, 58f)
             canvas.drawRoundRect(tmpRect, 12f, 12f, reroutePaint)
             canvas.drawText("Off route — recalculating", 38f, 42f, bannerTitlePaint)
-        } else if (f.layout != DashLayout.MINIMAL_NIGHT && (f.roadName != null || f.currentManeuver != null)) {
-            tmpRect.set(24f, 14f, w - 24f, 74f)
+        } else if (f.layout != DashLayout.MINIMAL_NIGHT && f.currentManeuver != null) {
+            tmpRect.set(24f, 14f, w - 24f, 58f)
             canvas.drawRoundRect(tmpRect, 12f, 12f, bannerPaint)
-            f.roadName?.let { canvas.drawText(ellipsize(it, 34), 38f, 36f, bannerDetailPaint) }
-            f.currentManeuver?.let { canvas.drawText(ellipsize(it, 30), 38f, 59f, bannerTitlePaint) }
+            f.currentManeuver?.let { canvas.drawText(ellipsize(it, 30), 38f, 42f, bannerTitlePaint) }
             if (f.layout == DashLayout.TURN_FIRST && f.nextManeuver != null) {
                 val label = listOfNotNull(f.nextManeuverDistance, f.nextManeuver).joinToString(" · ")
                 tmpRect.set(34f, 80f, w - 34f, 108f)
