@@ -67,6 +67,7 @@ class DashSession(private val scope: CoroutineScope) {
 
     // Live nav-info pushed to the dash bubble at ~1 Hz (set by NavEngine output).
     @Volatile private var navManeuver = DashCommands.NAV_MANEUVER_CONTINUE
+    @Volatile private var navSecondaryManeuver = DashCommands.NAV_MANEUVER_CONTINUE
     @Volatile private var navPrimaryDist = 0
     @Volatile private var navPrimaryUnit = DashCommands.NAV_UNIT_METERS
     @Volatile private var navTotalDist = 0
@@ -79,8 +80,10 @@ class DashSession(private val scope: CoroutineScope) {
     fun updateNavInfo(
         maneuver: Int, primaryDist: Int, primaryUnit: Int,
         totalDist: Int, totalUnit: Int, etaHHMM: String? = null,
+        secondaryManeuver: Int = DashCommands.NAV_MANEUVER_CONTINUE,
     ) {
         navManeuver = maneuver
+        navSecondaryManeuver = secondaryManeuver
         navPrimaryDist = primaryDist
         navPrimaryUnit = primaryUnit
         navTotalDist = totalDist
@@ -100,6 +103,8 @@ class DashSession(private val scope: CoroutineScope) {
         if (navActive) DashCommands.routeCard(
             destinationName, projectionOn,
             maneuver = navManeuver,
+            secondaryManeuver = navSecondaryManeuver,
+            primaryDist = navPrimaryDist,
             primaryUnit = navPrimaryUnit,
             totalDist = navTotalDist,
             totalUnit = navTotalUnit,

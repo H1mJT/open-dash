@@ -852,9 +852,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 etaArrivalMs = nowMs + (smoothEtaSec * 1000).toLong()
                 lastArrivalCalcMs = nowMs
             }
-            // Feed the dash's own turn-by-turn widget with the real upcoming maneuver,
-            // next-turn + total distances, and arrival time. This same live glyph is
-            // patched into both dashboard display modes by DashSession.
+            // Feed the dash's own turn-by-turn widget with the imminent and following
+            // maneuvers, next-turn + total distances, and arrival time. DashSession
+            // patches both native dashboard windows from this same live state.
             val (pv, pu) = toDashDistance(ns.nextTurnM)
             val (tv, tu) = toDashDistance(ns.remainingM)
             val arrival = java.util.Calendar.getInstance().apply {
@@ -864,12 +864,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 arrival.get(java.util.Calendar.HOUR_OF_DAY), arrival.get(java.util.Calendar.MINUTE)
             )
             session.updateNavInfo(
-                ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
+                secondaryManeuver = ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
             voice.maybeAnnounce(ns.nextManeuver, ns.nextTurnM, ns.remainingM)

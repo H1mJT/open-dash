@@ -155,13 +155,16 @@ object DashCommands {
      * that ride's values — total distance 0x004F (79 km-tenths = "7.9 km"),
      * glyph 0x3C, ETA "03:03". Re-sending them unpatched at 1 Hz stomps the live
      * figures from [activeNavPacket]. Pass the live values to overwrite them
-     * (field meanings per better-dash: 0502 glyph t3c.g, 0506 unit t3c.j,
-     * 0508 ETA HH:MM ASCII, 0509 total t3c.q, 0546 total unit t3c.r).
+     * (field meanings per better-dash: 0502 primary glyph, 0503 upcoming glyph,
+     * 0505 primary distance, 0506 unit, 0508 ETA HH:MM ASCII, 0509 total,
+     * 0546 total unit).
      */
     fun routeCard(
         title: String,
         projectionOn: Boolean = false,
         maneuver: Int? = null,
+        secondaryManeuver: Int? = null,
+        primaryDist: Int? = null,
         primaryUnit: Int? = null,
         totalDist: Int? = null,
         totalUnit: Int? = null,
@@ -196,12 +199,18 @@ object DashCommands {
         }
         patch1(0x06, 0x05, if (projectionOn) 0x55 else 0xAA)
         maneuver?.let { patch1(0x05, 0x02, it) }
+        // 0503 is the small, upcoming-turn glyph. Leaving the captured value here
+        // makes every route show the same stale symbol in the second nav window.
+        secondaryManeuver?.let { patch1(0x05, 0x03, it) }
+        // 0505 is the primary distance. It must be updated with the same live value
+        // as the active-nav packet or the route-card keepalive restores its capture.
+        primaryDist?.let { patch2(0x05, 0x05, it) }
         primaryUnit?.let { patch1(0x05, 0x06, it) }
         // The template carries the captured French ride's figures (total 0x004F =
         // "7.9 km", secondary 0x000A). Zero them by DEFAULT so a card sent with no live
         // route shows 0, not a bogus "7.9 km". Live callers pass real values.
         patch2(0x05, 0x09, totalDist ?: 0)
-        patch2(0x05, 0x05, 0)                       // stale secondary distance → 0
+        if (primaryDist == null) patch2(0x05, 0x05, 0)
         totalUnit?.let { patch1(0x05, 0x46, it) }
         if (etaHHMM != null && etaHHMM.length == 4) {
             val m = indexOf(bytes, byteArrayOf(0x05, 0x08, 0x00, 0x04), fromEnd = true)
