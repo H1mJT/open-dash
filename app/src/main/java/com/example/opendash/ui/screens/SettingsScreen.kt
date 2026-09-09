@@ -88,6 +88,7 @@ fun SettingsScreen(
     dashViewModel: DashViewModel,
     onSignedOut: () -> Unit,
     onBack: () -> Unit,
+    onJoystickDebug: () -> Unit,
 ) {
     val auth by authViewModel.state.collectAsState()
     val dashUi by dashViewModel.ui.collectAsState()
@@ -242,6 +243,8 @@ fun SettingsScreen(
                 MoreRow(OpenDashIcons.Gear, "Settings", "Connection, ride, wallpaper, voice, units", onClick = { page = MorePage.SETTINGS })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
                 MoreRow(OpenDashIcons.Navi, "Map provider", "OpenFreeMap or Google Maps", onClick = { page = MorePage.MAP_PROVIDER })
+                SettingsDivider(Modifier.padding(horizontal = 6.dp))
+                MoreRow(OpenDashIcons.Dash, "Joystick diagnostics", "View raw codes and configure mappings", onClick = onJoystickDebug)
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))
                 MoreRow(OpenDashIcons.Dash, "About", "OpenDash v${BuildConfig.VERSION_NAME}", onClick = { page = MorePage.ABOUT })
                 SettingsDivider(Modifier.padding(horizontal = 6.dp))

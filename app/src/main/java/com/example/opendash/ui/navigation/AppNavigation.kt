@@ -48,6 +48,7 @@ sealed class Screen(val route: String) {
     object Garage   : Screen("garage")
     object Rides    : Screen("rides")
     object Settings : Screen("settings")
+    object JoystickDebug : Screen("joystick-debug")
 }
 
 private data class NavTab(val screen: Screen, val icon: ImageVector, val label: String)
@@ -260,7 +261,12 @@ fun AppNavigation(
                             }
                         },
                         onBack = { navController.navigate(Screen.Home.route) { launchSingleTop = true } },
+                        onJoystickDebug = { navController.navigate(Screen.JoystickDebug.route) },
                     )
+                }
+
+                composable(Screen.JoystickDebug.route) {
+                    JoystickDebugScreen(vm = dashViewModel, onBack = { navController.popBackStack() })
                 }
             }
         }
