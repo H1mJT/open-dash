@@ -223,7 +223,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopTurnSymbolTest() {
         _ui.update { it.copy(turnSymbolTestCode = null) }
-        session.clearNavInfo()
+        session.clearNavInfo(hasLiveRoute = route != null)
     }
 
     /** Saves the rider's result for a calibration glyph; null means the glyph displayed nothing. */
@@ -898,7 +898,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // Revert to follow mode after the rider stops nudging the joystick.
         if (!followMode && System.currentTimeMillis() - lastManualPanAt > MANUAL_IDLE_MS) {
             panX = 0f; panY = 0f; followMode = true
-            _ui.value = _ui.value.copy(followMode = true)
+            _ui.update { it.copy(followMode = true) }
         }
 
         val loc = location.location.value
@@ -997,28 +997,30 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             "Arrive " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(it))
         }
         val guidance = navState
-        _ui.value = _ui.value.copy(
-            hasGps = loc != null,
-            gpsStatus = gpsStatus,
-            riderLat = matchedLat,
-            riderLng = matchedLng,
-            riderBearing = heading,
-            // Keep the phone map's blue line in sync with navigation progress instead of
-            // continuing to show the completed part of the original route.
-            routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
-            remainingKm = remainingM?.let { it / 1000.0 },
-            etaMinutes = etaSec?.let { (it / 60.0).toInt() },
-            roadName = if (!rerouting) guidance?.roadName ?: _ui.value.roadName else _ui.value.roadName,
-            currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.currentManeuver else _ui.value.currentManeuver,
-            // Only retain preview data during an active reroute. A normal exhausted
-            // preview must disappear instead of duplicating the prior instruction.
-            nextManeuver = if (rerouting) _ui.value.nextManeuver else guidance?.nextManeuver?.instruction,
-            nextManeuverDistance = if (rerouting) _ui.value.nextManeuverDistance else guidance?.nextManeuverDistanceM?.let(::fmtDist),
-            rerouting = rerouting,
-            arrivalTime = arrivalTime ?: _ui.value.arrivalTime,
-            maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.maneuver else _ui.value.maneuver,
-            offRoute = offRoute,
-        )
+        _ui.update { current ->
+            current.copy(
+                hasGps = loc != null,
+                gpsStatus = gpsStatus,
+                riderLat = matchedLat,
+                riderLng = matchedLng,
+                riderBearing = heading,
+                // Keep the phone map's blue line in sync with navigation progress instead of
+                // continuing to show the completed part of the original route.
+                routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
+                remainingKm = remainingM?.let { it / 1000.0 },
+                etaMinutes = etaSec?.let { (it / 60.0).toInt() },
+                roadName = if (!rerouting) guidance?.roadName ?: current.roadName else current.roadName,
+                currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.currentManeuver else current.currentManeuver,
+                // Only retain preview data during an active reroute. A normal exhausted
+                // preview must disappear instead of duplicating the prior instruction.
+                nextManeuver = if (rerouting) current.nextManeuver else guidance?.nextManeuver?.instruction,
+                nextManeuverDistance = if (rerouting) current.nextManeuverDistance else guidance?.nextManeuverDistanceM?.let(::fmtDist),
+                rerouting = rerouting,
+                arrivalTime = arrivalTime ?: current.arrivalTime,
+                maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.maneuver else current.maneuver,
+                offRoute = offRoute,
+            )
+        }
 
         updateThermal()
 
@@ -1336,7 +1338,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             PowerManager.THERMAL_STATUS_SEVERE, PowerManager.THERMAL_STATUS_CRITICAL -> "Hot"
             else -> "Throttling"
         }
-        if (label != _ui.value.thermal) _ui.value = _ui.value.copy(thermal = label)
+        _ui.update { current -> if (label == current.thermal) current else current.copy(thermal = label) }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
