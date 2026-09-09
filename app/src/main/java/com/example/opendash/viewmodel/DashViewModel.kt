@@ -108,6 +108,8 @@ data class DashUiState(
     val dashLayout: DashLayout = DashLayout.MAP_FIRST,
     /** Perspective map view, only used while following a route heading-up. */
     val navigationTiltEnabled: Boolean = true,
+    val streamFps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS,
+    val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
     /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
     val turnSymbolTestCode: Int? = null,
 )
@@ -147,9 +149,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var userWantsConnection = false
 
     init {
+        streamFps = dashConfig.streamFps
+        streamBitrateKbps = dashConfig.streamBitrateKbps
         _ui.value = _ui.value.copy(
             dashLayout = dashConfig.layout,
             navigationTiltEnabled = dashConfig.navigationTiltEnabled,
+            streamFps = dashConfig.streamFps,
+            streamBitrateKbps = dashConfig.streamBitrateKbps,
         )
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
@@ -170,6 +176,21 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         dashConfig.navigationTiltEnabled = enabled
         _ui.update { it.copy(navigationTiltEnabled = enabled) }
         lastSignature = ""
+    }
+
+    fun setStreamFps(fps: Int) {
+        val selected = fps.coerceIn(2, 8)
+        dashConfig.streamFps = selected
+        streamFps = selected
+        _ui.update { it.copy(streamFps = selected) }
+    }
+
+    fun setStreamBitrateKbps(kbps: Int) {
+        val selected = kbps.coerceIn(100, 500)
+        dashConfig.streamBitrateKbps = selected
+        streamBitrateKbps = selected
+        encoder?.updateBitrate(selected * 1_000)
+        _ui.update { it.copy(streamBitrateKbps = selected) }
     }
 
     /**
@@ -227,6 +248,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var fixWallMs = 0L
     private var lastFixTime = 0L
     @Volatile private var gpsStatus = GpsStatus.LOST
+    @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
+    @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
     // Smoothed rider position shown on the dash frame (locked to the camera centre so the
     // marker stays put and the map slides under it). null = no GPS.
@@ -261,7 +284,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         private const val MANUAL_IDLE_MS = 8_000L
         private const val FORCE_REDRAW_MS = 2_000L
         private const val SMOOTH_TAU = 0.28      // camera smoothing time constant (s)
-        private const val FPS_MOVING = 4
         private const val FPS_IDLE = 2
         private const val BTN_CALL_ANSWER = 0x06
         private const val BTN_CALL_REJECT = 0x07
@@ -803,7 +825,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(frameCount = it.frameCount + 1) }
         }
         encoder?.release()
-        encoder = DashEncoder(onEncoded).also { it.prepare() }
+        encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
         frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
         lastSignature = ""
@@ -822,7 +844,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive && session.state.value == DashState.STREAMING) {
                 try {
                     tick()
-                    // Push the (possibly cached) frame to the encoder at a steady 4 fps.
+                    // Push the (possibly cached) frame to the encoder at the selected rate.
                     val bmp = frameBitmap
                     val enc = encoder
                     if (bmp != null && enc != null) {
@@ -846,7 +868,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                         // stream recovers. The fresh encoder re-emits SPS/PPS, which the
                         // NAL processor bundles into the next IDR for the dash decoder.
                         runCatching { encoder?.release() }
-                        encoder = runCatching { DashEncoder(onEncoded).also { it.prepare() } }
+                        encoder = runCatching { DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() } }
                             .onFailure { DebugLog.e("DashViewModel", { "Encoder rebuild failed" }, it) }
                             .getOrNull()
                         lastSignature = "" // force a full redraw on the next tick
@@ -854,7 +876,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 // Dynamic pacing: buttery while moving, throttled when stopped (power).
-                delay(1000L / (if (camMoving) FPS_MOVING else FPS_IDLE))
+                delay(1000L / (if (camMoving) streamFps else minOf(FPS_IDLE, streamFps)))
             }
         }
     }

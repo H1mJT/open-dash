@@ -291,8 +291,31 @@ fun SettingsScreen(
             SettingRow(OpenDashIcons.Sync, "Auto-connect on start", "Link when the bike is near",
                 control = { SettingsToggle(autoConnect) { autoConnect = it } })
             SettingsDivider(Modifier.padding(horizontal = 6.dp))
-            SettingRow(OpenDashIcons.Zap, "Stream quality", "Balanced · saves battery",
-                control = { Icon(OpenDashIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) }, last = true)
+            SettingRow(
+                OpenDashIcons.Zap,
+                "Stream frame rate",
+                "Higher rates make map and joystick changes appear sooner but use more battery and may not suit every dash.",
+                control = { Text("${dashUi.streamFps} fps", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            )
+            OpenDashSegmented(
+                listOf("2 fps", "4 fps", "6 fps", "8 fps"),
+                "${dashUi.streamFps} fps",
+                { value -> dashViewModel.setStreamFps(value.substringBefore(' ').toInt()) },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            SettingRow(
+                OpenDashIcons.Zap,
+                "Stream bitrate",
+                "Higher bitrate improves map detail; use a lower value if the dash stutters. Reconnect if your encoder rejects a live change.",
+                control = { Text("${dashUi.streamBitrateKbps} kbps", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            )
+            OpenDashSegmented(
+                listOf("150", "200", "300", "400"),
+                dashUi.streamBitrateKbps.toString(),
+                { value -> dashViewModel.setStreamBitrateKbps(value.toInt()) },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
 
         SectionLabel("During a ride")

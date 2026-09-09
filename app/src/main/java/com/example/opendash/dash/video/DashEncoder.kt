@@ -6,15 +6,16 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
+import android.os.Bundle
 import android.view.Surface
 import com.example.opendash.util.DebugLog
 
 /**
  * MediaCodec H.264 encoder for the Tripper Dash stream:
- *   526 x 300, 2-4 fps, ~200 kbps, Baseline L4.1, 1-second IDR interval.
+ *   526 x 300, rider-selected 2-8 fps / 100-500 kbps, Baseline L4.1, 1-second IDR interval.
  *
- * [FPS] is the maximum encoder hint. The frame loop feeds 4 fps while moving and
- * throttles to 2 fps when stopped, matching the stable RE projection envelope.
+ * The frame-rate target is an encoder hint. The frame loop feeds that rate while moving and
+ * throttles to 2 fps when stopped. Higher rates should be validated on the individual dash.
  * The hardware encoder auto-timestamps each frame from the input surface, so the
  * variable feed rate is fine. Tiny resolution → still far under the OLED-projection
  * draw this whole project exists to avoid.
@@ -25,7 +26,11 @@ import com.example.opendash.util.DebugLog
  *
  * @param onEncodedData  called with (annexBBytes, isKeyFrame) for each output buffer.
  */
-class DashEncoder(private val onEncodedData: (ByteArray, Boolean) -> Unit) {
+class DashEncoder(
+    private val onEncodedData: (ByteArray, Boolean) -> Unit,
+    private val frameRate: Int = FPS,
+    private var bitrate: Int = BITRATE,
+) {
     companion object {
         const val WIDTH   = 526
         const val HEIGHT  = 300
@@ -43,8 +48,8 @@ class DashEncoder(private val onEncodedData: (ByteArray, Boolean) -> Unit) {
         val format = MediaFormat.createVideoFormat(MIME, WIDTH, HEIGHT).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, BITRATE)
-            setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_PROFILE,
                 MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
@@ -121,6 +126,16 @@ class DashEncoder(private val onEncodedData: (ByteArray, Boolean) -> Unit) {
                 }
             }
         }
+    }
+
+    /** Apply a user-selected bitrate without tearing down the active projection stream. */
+    fun updateBitrate(newBitrate: Int) {
+        bitrate = newBitrate
+        runCatching {
+            codec?.setParameters(Bundle().apply {
+                putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, newBitrate)
+            })
+        }.onFailure { DebugLog.w(TAG) { "Encoder bitrate update rejected: ${it.message}" } }
     }
 
     fun release() {

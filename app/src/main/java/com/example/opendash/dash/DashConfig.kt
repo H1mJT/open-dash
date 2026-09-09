@@ -63,6 +63,16 @@ class DashConfig private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_NAVIGATION_TILT, true)
         set(value) = prefs.edit().putBoolean(KEY_NAVIGATION_TILT, value).apply()
 
+    /** Encoder frame-rate target. The renderer still drops to 2 fps while parked. */
+    var streamFps: Int
+        get() = prefs.getInt(KEY_STREAM_FPS, DEFAULT_STREAM_FPS).coerceIn(2, 8)
+        set(value) = prefs.edit().putInt(KEY_STREAM_FPS, value.coerceIn(2, 8)).apply()
+
+    /** H.264 target bitrate in kbps for the Tripper projection stream. */
+    var streamBitrateKbps: Int
+        get() = prefs.getInt(KEY_STREAM_BITRATE_KBPS, DEFAULT_STREAM_BITRATE_KBPS).coerceIn(100, 500)
+        set(value) = prefs.edit().putInt(KEY_STREAM_BITRATE_KBPS, value.coerceIn(100, 500)).apply()
+
     /** True until a specific dash has been identified — connect by prefix discovery. */
     val needsDiscovery: Boolean get() = ssid.isBlank()
 
@@ -119,8 +129,12 @@ class DashConfig private constructor(context: Context) {
         private const val KEY_PASSWORD = "password"
         private const val KEY_LAYOUT = "layout"
         private const val KEY_NAVIGATION_TILT = "navigation_tilt"
+        private const val KEY_STREAM_FPS = "stream_fps"
+        private const val KEY_STREAM_BITRATE_KBPS = "stream_bitrate_kbps"
         const val DEFAULT_PREFIX   = "RE_"
         const val DEFAULT_PASSWORD = "12345678"
+        const val DEFAULT_STREAM_FPS = 4
+        const val DEFAULT_STREAM_BITRATE_KBPS = 200
 
         @Volatile private var instance: DashConfig? = null
         fun get(context: Context): DashConfig =
