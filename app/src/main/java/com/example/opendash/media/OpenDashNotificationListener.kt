@@ -67,12 +67,7 @@ class OpenDashNotificationListener : NotificationListenerService() {
             ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
     }
 
-    private fun callerPhoto(notification: Notification): Bitmap? = when (val icon = notification.largeIcon) {
-        null -> null
-        else -> icon.loadDrawable(this)?.let { drawable ->
-            Bitmap.createBitmap(drawable.intrinsicWidth.coerceAtLeast(1), drawable.intrinsicHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888).also { bitmap ->
-                android.graphics.Canvas(bitmap).also { drawable.setBounds(0, 0, it.width, it.height); drawable.draw(it) }
-            }
-        }
-    }
+    /** Notification.largeIcon is a Bitmap on this API surface, not an Icon. */
+    @Suppress("DEPRECATION")
+    private fun callerPhoto(notification: Notification): Bitmap? = notification.largeIcon
 }
