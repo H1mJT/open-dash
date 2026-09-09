@@ -54,6 +54,15 @@ class DashConfig private constructor(context: Context) {
             ?: DashLayout.MAP_FIRST
         set(value) = prefs.edit().putString(KEY_LAYOUT, value.name).apply()
 
+    /**
+     * Perspective navigation view for the rendered dash map. This is deliberately
+     * separate from heading-up: a rider can retain a conventional flat map while
+     * still having the map rotate with their direction of travel.
+     */
+    var navigationTiltEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NAVIGATION_TILT, true)
+        set(value) = prefs.edit().putBoolean(KEY_NAVIGATION_TILT, value).apply()
+
     /** True until a specific dash has been identified — connect by prefix discovery. */
     val needsDiscovery: Boolean get() = ssid.isBlank()
 
@@ -109,6 +118,7 @@ class DashConfig private constructor(context: Context) {
         private const val KEY_SSID     = "ssid"
         private const val KEY_PASSWORD = "password"
         private const val KEY_LAYOUT = "layout"
+        private const val KEY_NAVIGATION_TILT = "navigation_tilt"
         const val DEFAULT_PREFIX   = "RE_"
         const val DEFAULT_PASSWORD = "12345678"
 

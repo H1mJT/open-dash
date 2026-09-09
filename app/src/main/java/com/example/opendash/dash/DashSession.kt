@@ -94,6 +94,15 @@ class DashSession(private val scope: CoroutineScope) {
     }
 
     /**
+     * Hide native navigation chrome when it is only being used for a maneuver-glyph
+     * calibration session. A live route will repopulate it on its next navigation tick.
+     */
+    fun clearNavInfo() {
+        navActive = false
+        navChromeEnabled = false
+    }
+
+    /**
      * Route card with the LIVE nav figures patched in. The template's captured
      * values (7.9 km / glyph 0x3C / ETA 03:03) must never reach the dash once
      * real guidance is running — the card repeats at 1 Hz and would stomp the

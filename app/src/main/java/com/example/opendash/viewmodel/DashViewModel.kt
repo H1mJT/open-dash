@@ -106,6 +106,10 @@ data class DashUiState(
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
     val dashLayout: DashLayout = DashLayout.MAP_FIRST,
+    /** Perspective map view, only used while following a route heading-up. */
+    val navigationTiltEnabled: Boolean = true,
+    /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
+    val turnSymbolTestCode: Int? = null,
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -143,7 +147,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var userWantsConnection = false
 
     init {
-        _ui.value = _ui.value.copy(dashLayout = dashConfig.layout)
+        _ui.value = _ui.value.copy(
+            dashLayout = dashConfig.layout,
+            navigationTiltEnabled = dashConfig.navigationTiltEnabled,
+        )
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
                 if (route?.isOffline != true) _ui.update {
@@ -157,6 +164,39 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         dashConfig.layout = layout
         _ui.update { it.copy(dashLayout = layout) }
         lastSignature = ""
+    }
+
+    fun setNavigationTiltEnabled(enabled: Boolean) {
+        dashConfig.navigationTiltEnabled = enabled
+        _ui.update { it.copy(navigationTiltEnabled = enabled) }
+        lastSignature = ""
+    }
+
+    /**
+     * Show a raw Tripper maneuver glyph on both native turn slots. This makes it possible
+     * to build a firmware-specific glyph map from the Settings screen without changing
+     * route data. It deliberately overrides live route glyphs until [stopTurnSymbolTest].
+     */
+    fun sendTurnSymbolTest(code: Int) {
+        if (session.state.value != DashState.STREAMING) {
+            _ui.update { it.copy(errorMessage = "Connect and start streaming before sending a turn symbol.") }
+            return
+        }
+        val glyph = code.coerceIn(0, 0xFF)
+        session.updateNavInfo(
+            maneuver = glyph,
+            primaryDist = 100,
+            primaryUnit = DashCommands.NAV_UNIT_METERS,
+            totalDist = 10,
+            totalUnit = DashCommands.NAV_UNIT_KM_TENTHS,
+            secondaryManeuver = glyph,
+        )
+        _ui.update { it.copy(turnSymbolTestCode = glyph, errorMessage = null) }
+    }
+
+    fun stopTurnSymbolTest() {
+        _ui.update { it.copy(turnSymbolTestCode = null) }
+        session.clearNavInfo()
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -883,14 +923,17 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             val etaHHMM = "%02d%02d".format(
                 arrival.get(java.util.Calendar.HOUR_OF_DAY), arrival.get(java.util.Calendar.MINUTE)
             )
+            // A calibration glyph deliberately replaces both live glyphs, while retaining
+            // real route distances and ETA so the dash stays in its navigation view.
+            val testGlyph = _ui.value.turnSymbolTestCode
             session.updateNavInfo(
-                ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                testGlyph ?: ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
-                secondaryManeuver = ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                secondaryManeuver = testGlyph ?: ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
             voice.maybeAnnounce(ns.currentManeuver, ns.nextTurnM, ns.remainingM)
@@ -1110,10 +1153,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             nextManeuverDistance = _ui.value.nextManeuverDistance,
             rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
-            // Top-down (heading-up) nav view. The 3D perspective tilt is DISABLED: warping
-            // flat raster tiles via setPolyToPoly stretches the baked-in map labels and
-            // skews the angle (you can't get true Google-Maps 3D without vector tiles).
-            tilt3d = false,
+            // This is a perspective treatment of raster tiles rather than true 3D terrain,
+            // but it supplies the forward-looking navigation view riders expect. It remains
+            // optional because perspective-warped raster labels are less crisp than vector tiles.
+            tilt3d = _ui.value.navigationTiltEnabled,
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
