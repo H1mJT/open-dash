@@ -35,7 +35,12 @@ class MapRenderer(private val tiles: TileProvider) {
         val destLng: Double? = null,
         val destName: String? = null,
         val route: List<GeoPoint> = emptyList(),
-        val maneuverText: String? = null,  // e.g. "Turn left · 400 m"
+        val roadName: String? = null,
+        val currentManeuver: String? = null,
+        val nextManeuver: String? = null,
+        val nextManeuverDistance: String? = null,
+        /** Active request, not merely a detected off-route position. */
+        val rerouting: Boolean = false,
         val remainingText: String? = null, // e.g. "186 km"
         val tilt3d: Boolean = false,       // perspective 3D view (nav heading-up only)
         val etaPrimary: String? = null,    // big glance value, e.g. "24 min" (nav only)
@@ -65,7 +70,12 @@ class MapRenderer(private val tiles: TileProvider) {
     private val dotPaint     = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint    = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 22f; isFakeBoldText = true }
     private val subTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = routeBlue; textSize = 19f; isFakeBoldText = true }
-    private val bannerPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(215, 13, 15, 17) }
+    private val bannerPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 13, 15, 17) }
+    private val reroutePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(176, 22, 30) }
+    private val bannerTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 15f; isFakeBoldText = true }
+    private val bannerDetailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(225, 229, 235); textSize = 12f }
+    private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(224, 13, 15, 17) }
+    private val previewTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 11f; isFakeBoldText = true }
     private val standbyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(60, 64, 67); textSize = 22f; isFakeBoldText = true }
 
     // ETA pill (drawn in screen space, bottom-centre, inside the round safe zone)
@@ -198,6 +208,24 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate) canvas.restore()
 
+        // ── Guidance hierarchy (screen space: road, imminent turn, then next turn) ──
+        if (f.rerouting) {
+            tmpRect.set(24f, 14f, w - 24f, 58f)
+            canvas.drawRoundRect(tmpRect, 12f, 12f, reroutePaint)
+            canvas.drawText("Off route — recalculating", 38f, 42f, bannerTitlePaint)
+        } else if (f.roadName != null || f.currentManeuver != null) {
+            tmpRect.set(24f, 14f, w - 24f, 74f)
+            canvas.drawRoundRect(tmpRect, 12f, 12f, bannerPaint)
+            f.roadName?.let { canvas.drawText(ellipsize(it, 34), 38f, 36f, bannerDetailPaint) }
+            f.currentManeuver?.let { canvas.drawText(ellipsize(it, 30), 38f, 59f, bannerTitlePaint) }
+            if (f.nextManeuver != null) {
+                val label = listOfNotNull(f.nextManeuverDistance, f.nextManeuver).joinToString(" · ")
+                tmpRect.set(34f, 80f, w - 34f, 108f)
+                canvas.drawRoundRect(tmpRect, 10f, 10f, previewPaint)
+                canvas.drawText("Then " + ellipsize(label, 42), 46f, 99f, previewTextPaint)
+            }
+        }
+
         // ── ETA pill (screen-space so it stays upright; bottom-centre safe zone) ──
         // The dash is round, so it's kept narrow and centred. Shows ETA only (time +
         // arrival clock) — distance lives on the dash's own widget.
@@ -242,8 +270,9 @@ class MapRenderer(private val tiles: TileProvider) {
             canvas.drawText(label, center, top + 6f - font.ascent, gpsPillText)
         }
 
-        // No other on-map text overlays — the dash's own widgets show name/turn, and the
-        // round bezel clips anything near the top edge.
+        // Guidance text is intentionally rendered alongside the map, rather than relying
+        // on a glyph alone, so it remains understandable at a glance and by screen readers
+        // in the matching phone UI.
 
         // ── Standby when nothing to show (dark text on the light map bg) ──
         if (f.riderLat == null && f.destLat == null) {
@@ -252,4 +281,7 @@ class MapRenderer(private val tiles: TileProvider) {
             canvas.drawText(msg, (w - textBounds.width()) / 2f, h / 2f, standbyPaint)
         }
     }
+
+    private fun ellipsize(value: String, maxChars: Int): String =
+        if (value.length <= maxChars) value else value.take(maxChars - 1) + "…"
 }

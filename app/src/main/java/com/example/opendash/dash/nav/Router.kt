@@ -66,11 +66,21 @@ object Router {
                     val loc = man.optJSONArray("location") ?: continue
                     val p = GeoPoint(loc.getDouble(1), loc.getDouble(0))
                     val type = ManeuverType.fromOsrm(man.optString("type"), man.optString("modifier"))
-                    val name = step.optString("name").ifBlank { "road" }
+                    val roadName = step.optString("name").takeIf { it.isNotBlank() }
+                    val roadRef = step.optString("ref").takeIf { it.isNotBlank() }
+                    val lanes = parseLanes(step)
                     maneuvers.add(
                         Maneuver(
                             type = type,
-                            instruction = buildInstruction(type, name),
+                            // Some OSRM-compatible providers include prose; do not discard it.
+                            instruction = step.optString("instruction").takeIf { it.isNotBlank() }
+                                ?: man.optString("instruction").takeIf { it.isNotBlank() }
+                                ?: buildInstruction(type, roadName ?: roadRef),
+                            roadName = roadName,
+                            roadRef = roadRef,
+                            lanes = lanes,
+                            rawType = man.optString("type").takeIf { it.isNotBlank() },
+                            modifier = man.optString("modifier").takeIf { it.isNotBlank() },
                             location = p,
                             cumulativeMeters = nearestCumulative(p, geometry, cum),
                         )
@@ -88,18 +98,38 @@ object Router {
         )
     }
 
-    private fun buildInstruction(type: ManeuverType, road: String): String = when (type) {
-        ManeuverType.DEPART       -> "Head out on $road"
+    /** OSRM has no standard prose instruction; retain all supplied route metadata and build stable text. */
+    private fun buildInstruction(type: ManeuverType, road: String?): String {
+        val destination = road?.takeIf { it.isNotBlank() }
+        val onto = destination?.let { " onto $it" }.orEmpty()
+        return when (type) {
+        ManeuverType.DEPART       -> destination?.let { "Head out on $it" } ?: "Head out"
         ManeuverType.ARRIVE       -> "Arrive at destination"
-        ManeuverType.TURN_LEFT    -> "Turn left onto $road"
-        ManeuverType.TURN_RIGHT   -> "Turn right onto $road"
-        ManeuverType.SLIGHT_LEFT  -> "Slight left onto $road"
-        ManeuverType.SLIGHT_RIGHT -> "Slight right onto $road"
-        ManeuverType.SHARP_LEFT   -> "Sharp left onto $road"
-        ManeuverType.SHARP_RIGHT  -> "Sharp right onto $road"
-        ManeuverType.UTURN        -> "Make a U-turn"
-        ManeuverType.ROUNDABOUT   -> "At the roundabout, take $road"
-        ManeuverType.CONTINUE     -> "Continue on $road"
+        ManeuverType.TURN_LEFT    -> "Turn left$onto"
+        ManeuverType.TURN_RIGHT   -> "Turn right$onto"
+        ManeuverType.SLIGHT_LEFT  -> "Slight left$onto"
+        ManeuverType.SLIGHT_RIGHT -> "Slight right$onto"
+        ManeuverType.SHARP_LEFT   -> "Sharp left$onto"
+        ManeuverType.SHARP_RIGHT  -> "Sharp right$onto"
+        ManeuverType.UTURN        -> "Make a U-turn$onto"
+        ManeuverType.ROUNDABOUT   -> "At the roundabout, take$onto"
+        ManeuverType.CONTINUE     -> "Continue${destination?.let { " on $it" }.orEmpty()}"
+        }
+    }
+
+    private fun parseLanes(step: JSONObject): List<LaneGuidance> {
+        val intersections = step.optJSONArray("intersections") ?: return emptyList()
+        for (i in 0 until intersections.length()) {
+            val lanes = intersections.optJSONObject(i)?.optJSONArray("lanes") ?: continue
+            return List(lanes.length()) { index ->
+                val lane = lanes.optJSONObject(index)
+                LaneGuidance(
+                    indications = lane?.optString("indications")?.split(';')?.filter { it.isNotBlank() }.orEmpty(),
+                    isValid = lane?.optBoolean("valid", false) ?: false,
+                )
+            }
+        }
+        return emptyList()
     }
 
     /** Cumulative distance of the geometry vertex nearest to a maneuver location. */

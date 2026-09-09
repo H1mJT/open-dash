@@ -29,11 +29,26 @@ enum class ManeuverType { CONTINUE, TURN_LEFT, TURN_RIGHT, SLIGHT_LEFT, SLIGHT_R
 /** One routing instruction located at a point along the geometry. */
 data class Maneuver(
     val type: ManeuverType,
+    /** Complete rider-facing instruction, supplied by the router when available. */
     val instruction: String,
+    /** Name of the road entered by this step, if the router supplied one. */
+    val roadName: String? = null,
+    /** Signed/highway reference for the road entered by this step, if supplied. */
+    val roadRef: String? = null,
+    /** Lane indications and validity from the upcoming intersection, if supplied. */
+    val lanes: List<LaneGuidance> = emptyList(),
+    /** Original maneuver metadata retained for clients that need richer presentation. */
+    val rawType: String? = null,
+    val modifier: String? = null,
     val location: GeoPoint,
     /** Cumulative distance (m) from the route start to this maneuver's location. */
     val cumulativeMeters: Double,
 ) {
+    /** A maneuver that merits a distinct turn-preview row. */
+    val isMeaningful: Boolean get() = type !in setOf(ManeuverType.DEPART, ManeuverType.CONTINUE)
+
+    /** Best display name for the road, preferring its proper name over its signed ref. */
+    val displayRoadName: String? get() = roadName?.takeIf { it.isNotBlank() } ?: roadRef?.takeIf { it.isNotBlank() }
     /**
      * Dash maneuver glyph byte. 0x0B is the roundabout glyph, so it must never be
      * used as the generic fallback: doing so makes every upcoming instruction look
@@ -52,6 +67,12 @@ data class Maneuver(
         ManeuverType.ROUNDABOUT   -> 0x0B
     }
 }
+
+/** Lane advice supplied by OSRM's intersection metadata. */
+data class LaneGuidance(
+    val indications: List<String>,
+    val isValid: Boolean,
+)
 
 /** A computed road route from origin to destination. */
 data class Route(
