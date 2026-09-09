@@ -24,6 +24,7 @@ import com.example.opendash.data.MapProviderSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.opendash.dash.nav.GeoPoint
+import com.example.opendash.dash.map.Mercator
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -68,6 +69,10 @@ fun OpenDashMap(
     fitRoute: Boolean = false,
     navMode: Boolean = false,
     riderBearing: Float = 0f,
+    /** Dash renderer camera values, used by the in-app preview when its controls are used. */
+    dashZoom: Int? = null,
+    dashPanX: Float = 0f,
+    dashPanY: Float = 0f,
 ) {
     val provider by MapProviderSettings.provider.collectAsState()
     val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
@@ -79,7 +84,10 @@ fun OpenDashMap(
             modifier = modifier,
         )
     } else {
-        MapLibreOpenDashMap(riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode, riderBearing, modifier)
+        MapLibreOpenDashMap(
+            riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode,
+            riderBearing, dashZoom, dashPanX, dashPanY, modifier,
+        )
     }
 }
 
@@ -93,6 +101,9 @@ private fun MapLibreOpenDashMap(
     fitRoute: Boolean,
     navMode: Boolean,
     riderBearing: Float,
+    dashZoom: Int?,
+    dashPanX: Float,
+    dashPanY: Float,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -178,7 +189,7 @@ private fun MapLibreOpenDashMap(
     }
 
     // Camera control.
-    LaunchedEffect(styleReady, riderLat, riderLng, riderBearing, navMode, fitRoute, routePoints) {
+    LaunchedEffect(styleReady, riderLat, riderLng, riderBearing, navMode, fitRoute, routePoints, dashZoom, dashPanX, dashPanY) {
         if (destroyed) return@LaunchedEffect
         val m = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
@@ -198,10 +209,18 @@ private fun MapLibreOpenDashMap(
                 } else {
                     LatLng(riderLat, riderLng)
                 }
+                // The physical dash uses Web-Mercator tile pixels for pan. Transform the
+                // same pixel offsets into a geographic camera target for this preview.
+                val dashTarget = dashZoom?.let { zoom ->
+                    val tileX = Mercator.lngToTileX(target.longitude, zoom) + dashPanX / Mercator.TILE_SIZE
+                    val tileY = Mercator.latToTileY(target.latitude, zoom) + dashPanY / Mercator.TILE_SIZE
+                    LatLng(Mercator.tileYToLat(tileY, zoom), Mercator.tileXToLng(tileX, zoom))
+                } ?: target
+                val previewZoom = dashZoom?.toDouble() ?: if (navMode) NAV_ZOOM else FOLLOW_ZOOM
                 val pos = if (navMode)
-                    CameraPosition.Builder().target(target).zoom(NAV_ZOOM).tilt(NAV_TILT).bearing(riderBearing.toDouble()).build()
+                    CameraPosition.Builder().target(dashTarget).zoom(previewZoom).tilt(NAV_TILT).bearing(riderBearing.toDouble()).build()
                 else
-                    CameraPosition.Builder().target(target).zoom(FOLLOW_ZOOM).tilt(0.0).bearing(0.0).build()
+                    CameraPosition.Builder().target(dashTarget).zoom(previewZoom).tilt(0.0).bearing(0.0).build()
                 runCatching { m.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 600) }
             }
             dest != null -> runCatching {

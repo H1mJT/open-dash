@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.opendash.util.DebugLog
+import com.example.opendash.dash.nav.ManeuverType
 
 /** Rider-selected hierarchy for the already-rendered video dashboard. */
 enum class DashLayout(val label: String) {
@@ -73,6 +74,38 @@ class DashConfig private constructor(context: Context) {
         get() = prefs.getInt(KEY_STREAM_BITRATE_KBPS, DEFAULT_STREAM_BITRATE_KBPS).coerceIn(100, 500)
         set(value) = prefs.edit().putInt(KEY_STREAM_BITRATE_KBPS, value.coerceIn(100, 500)).apply()
 
+    /**
+     * Rider-calibrated native navigation glyphs. A dash firmware may use different byte
+     * values than the known defaults, so keep the mapping on the device that was tested.
+     */
+    var maneuverGlyphCodes: Map<ManeuverType, Int>
+        get() = (prefs.getString(KEY_MANEUVER_GLYPH_CODES, null) ?: "")
+            .split(',')
+            .mapNotNull { entry ->
+                val (type, code) = entry.split(':', limit = 2).let { it.getOrNull(0) to it.getOrNull(1) }
+                val maneuver = type?.let { runCatching { ManeuverType.valueOf(it) }.getOrNull() }
+                val glyph = code?.toIntOrNull()?.takeIf { it in 0..0xFF }
+                if (maneuver != null && glyph != null) maneuver to glyph else null
+            }
+            .toMap()
+        set(value) = prefs.edit().putString(
+            KEY_MANEUVER_GLYPH_CODES,
+            value.entries.joinToString(",") { "${it.key.name}:${it.value.coerceIn(0, 0xFF)}" },
+        ).apply()
+
+    /** Associates a tested native glyph with a route maneuver; null records no symbol. */
+    fun setManeuverGlyph(code: Int, maneuver: ManeuverType?) {
+        val sanitizedCode = code.coerceIn(0, 0xFF)
+        val updated = maneuverGlyphCodes
+            .filterValues { it != sanitizedCode }
+            .toMutableMap()
+        if (maneuver != null) updated[maneuver] = sanitizedCode
+        maneuverGlyphCodes = updated
+    }
+
+    fun maneuverGlyphCode(maneuver: ManeuverType): Int =
+        maneuverGlyphCodes[maneuver] ?: maneuver.defaultDashCode
+
     /** True until a specific dash has been identified — connect by prefix discovery. */
     val needsDiscovery: Boolean get() = ssid.isBlank()
 
@@ -131,6 +164,7 @@ class DashConfig private constructor(context: Context) {
         private const val KEY_NAVIGATION_TILT = "navigation_tilt"
         private const val KEY_STREAM_FPS = "stream_fps"
         private const val KEY_STREAM_BITRATE_KBPS = "stream_bitrate_kbps"
+        private const val KEY_MANEUVER_GLYPH_CODES = "maneuver_glyph_codes"
         const val DEFAULT_PREFIX   = "RE_"
         const val DEFAULT_PASSWORD = "12345678"
         const val DEFAULT_STREAM_FPS = 4
