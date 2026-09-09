@@ -9,6 +9,14 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.opendash.util.DebugLog
 
+/** Rider-selected hierarchy for the already-rendered video dashboard. */
+enum class DashLayout(val label: String) {
+    MAP_FIRST("Map first"),
+    TURN_FIRST("Turn first"),
+    LARGE_SPEED("Large speed"),
+    MINIMAL_NIGHT("Minimal night"),
+}
+
 /**
  * Per-rider dash WiFi configuration, persisted on-device.
  *
@@ -40,6 +48,12 @@ class DashConfig private constructor(context: Context) {
         get() = prefs.getString(KEY_PASSWORD, DEFAULT_PASSWORD) ?: DEFAULT_PASSWORD
         set(v) = prefs.edit().putString(KEY_PASSWORD, v).apply()
 
+    var layout: DashLayout
+        get() = prefs.getString(KEY_LAYOUT, DashLayout.MAP_FIRST.name)
+            ?.let { runCatching { DashLayout.valueOf(it) }.getOrNull() }
+            ?: DashLayout.MAP_FIRST
+        set(value) = prefs.edit().putString(KEY_LAYOUT, value.name).apply()
+
     /** True until a specific dash has been identified — connect by prefix discovery. */
     val needsDiscovery: Boolean get() = ssid.isBlank()
 
@@ -66,7 +80,7 @@ class DashConfig private constructor(context: Context) {
     }
 
     private fun migrateLegacyValues(encryptedPrefs: SharedPreferences) {
-        val legacyValues = listOf(KEY_PREFIX, KEY_SSID, KEY_PASSWORD)
+        val legacyValues = listOf(KEY_PREFIX, KEY_SSID, KEY_PASSWORD, KEY_LAYOUT)
             .mapNotNull { key -> legacyPrefs.getString(key, null)?.let { key to it } }
         if (legacyValues.isEmpty()) return
 
@@ -94,6 +108,7 @@ class DashConfig private constructor(context: Context) {
         private const val KEY_PREFIX   = "ssid_prefix"
         private const val KEY_SSID     = "ssid"
         private const val KEY_PASSWORD = "password"
+        private const val KEY_LAYOUT = "layout"
         const val DEFAULT_PREFIX   = "RE_"
         const val DEFAULT_PASSWORD = "12345678"
 

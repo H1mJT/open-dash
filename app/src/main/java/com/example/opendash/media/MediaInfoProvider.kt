@@ -7,6 +7,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.SystemClock
 import android.provider.Settings
 import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,30 @@ class MediaInfoProvider(private val context: Context) {
         controller != null
     }.getOrDefault(false)
 
+    fun togglePlayback(): Boolean = runCatching {
+        val state = controller?.playbackState ?: return false
+        if (state.state == PlaybackState.STATE_PLAYING) controller?.transportControls?.pause()
+        else controller?.transportControls?.play()
+        true
+    }.getOrDefault(false)
+
+    fun seekBy(deltaMs: Long): Boolean = runCatching {
+        val state = controller?.playbackState ?: return false
+        if (state.actions and PlaybackState.ACTION_SEEK_TO == 0L) return false
+        val duration = controller?.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
+        val elapsedMs = (SystemClock.elapsedRealtime() - state.lastPositionUpdateTime).coerceAtLeast(0L)
+        val livePosition = if (state.state == PlaybackState.STATE_PLAYING) {
+            state.position + (elapsedMs * state.playbackSpeed).toLong()
+        } else {
+            state.position
+        }
+        val target = (livePosition + deltaMs).coerceAtLeast(0L).let { position ->
+            if (duration > 0L) position.coerceAtMost(duration) else position
+        }
+        controller?.transportControls?.seekTo(target)
+        true
+    }.getOrDefault(false)
+
     private fun bind(sessions: List<MediaController>?) {
         val next = sessions?.firstOrNull()
         if (next?.sessionToken == controller?.sessionToken) {
@@ -83,7 +108,17 @@ class MediaInfoProvider(private val context: Context) {
         val art = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
-        _nowPlaying.value = NowPlaying(title, album, artist, art)
+        val state = controller?.playbackState
+        _nowPlaying.value = NowPlaying(
+            title = title,
+            album = album,
+            artist = artist,
+            art = art,
+            isPlaying = state?.state == PlaybackState.STATE_PLAYING,
+            positionMs = state?.position ?: 0L,
+            durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
+            canSeek = state?.actions?.and(PlaybackState.ACTION_SEEK_TO) != 0L,
+        )
     }
 
     companion object {

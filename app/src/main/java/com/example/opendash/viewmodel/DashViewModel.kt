@@ -16,6 +16,7 @@ import com.example.opendash.data.JoystickEvent
 import com.example.opendash.data.JoystickMappingStore
 import com.example.opendash.data.MappingAssignment
 import com.example.opendash.dash.DashKeepAliveService
+import com.example.opendash.dash.DashLayout
 import com.example.opendash.dash.DashSession
 import com.example.opendash.dash.DashState
 import com.example.opendash.dash.DashWifiManager
@@ -47,6 +48,12 @@ import kotlinx.coroutines.flow.update
 enum class ConnStage { OFFLINE, WIFI, AUTH, STREAMING, ERROR }
 enum class GpsStatus { GOOD, WEAK, LOST }
 enum class OfflineStatus { ONLINE, OFFLINE_MAP_READY, OFFLINE_ROUTE_ONLY, INSUFFICIENT_COVERAGE }
+
+data class JoystickMappingConflict(
+    val capturedCode: Int,
+    val existingCode: Int,
+    val existingAction: JoystickAction,
+)
 
 data class DashUiState(
     val stage: ConnStage = ConnStage.OFFLINE,
@@ -96,6 +103,7 @@ data class DashUiState(
     val wallpaperError: String? = null,
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
+    val dashLayout: DashLayout = DashLayout.MAP_FIRST,
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -123,7 +131,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     val joystickEvents = _joystickEvents.asStateFlow()
     private val _captureAction = MutableStateFlow<JoystickAction?>(null)
     val captureAction = _captureAction.asStateFlow()
-    private val _captureConflict = MutableStateFlow<Pair<Int, JoystickAction>?>(null)
+    private val _captureConflict = MutableStateFlow<JoystickMappingConflict?>(null)
     val captureConflict = _captureConflict.asStateFlow()
 
     private var encoder: DashEncoder? = null
@@ -133,6 +141,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var userWantsConnection = false
 
     init {
+        _ui.value = _ui.value.copy(dashLayout = dashConfig.layout)
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
                 if (route?.isOffline != true) _ui.update {
@@ -140,6 +149,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    fun setDashLayout(layout: DashLayout) {
+        dashConfig.layout = layout
+        _ui.update { it.copy(dashLayout = layout) }
+        lastSignature = ""
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -293,7 +308,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             if (capture != null) {
                 when (val result = joystickMappings.assign(code, capture)) {
                     MappingAssignment.Saved -> _captureAction.value = null
-                    is MappingAssignment.Conflict -> _captureConflict.value = code to result.existingAction
+                    is MappingAssignment.Conflict -> _captureConflict.value = JoystickMappingConflict(
+                        capturedCode = code,
+                        existingCode = result.existingCode,
+                        existingAction = result.existingAction,
+                    )
                 }
                 _ui.value = _ui.value.copy(lastButton = "Captured ${JoystickMappingStore.formatCode(code)}")
             } else {
@@ -308,7 +327,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmJoystickReplacement() {
         val conflict = _captureConflict.value ?: return
         val action = _captureAction.value ?: return
-        joystickMappings.assign(conflict.first, action, replaceConflict = true)
+        joystickMappings.assign(conflict.capturedCode, action, replaceConflict = true)
         _captureConflict.value = null
         _captureAction.value = null
     }
@@ -319,6 +338,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private fun performJoystickAction(action: JoystickAction?, code: Int): String {
         val call = CallInfoProvider.incomingCall.value
         val mediaActive = mediaInfo.nowPlaying.value != null
+        // Retain every stock gallery control while idle, including buttons assigned to
+        // call actions in the editable mapping table.
+        if (isIdleWallpaperMode() && call == null) {
+            if (isNextWallpaperButton(code)) { cycleWallpaper(1); return "Next wallpaper" }
+            if (isPreviousWallpaperButton(code)) { cycleWallpaper(-1); return "Previous wallpaper" }
+        }
         return when (action) {
             JoystickAction.ANSWER_CALL -> if (call?.incoming == true) { answerCall(call); "Call answered" } else "Answer ignored"
             JoystickAction.REJECT_CALL -> if (call != null) { endCall(call); if (call.incoming) "Call rejected" else "Call ended" } else "Reject ignored"
@@ -332,6 +357,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 mediaActive -> { mediaInfo.skipPrevious(); "Previous track" }
                 else -> { zoomOut(); "Zoom out" }
             }
+            JoystickAction.TOGGLE_PLAYBACK -> if (mediaActive && mediaInfo.togglePlayback()) "Playback toggled" else "Playback unavailable"
+            JoystickAction.SEEK_FORWARD -> if (mediaActive && mediaInfo.seekBy(15_000)) "Forward 15 seconds" else "Seeking unavailable"
+            JoystickAction.SEEK_BACKWARD -> if (mediaActive && mediaInfo.seekBy(-15_000)) "Back 15 seconds" else "Seeking unavailable"
             JoystickAction.ZOOM_IN -> { zoomIn(); "Zoom in" }
             JoystickAction.ZOOM_OUT -> { zoomOut(); "Zoom out" }
             JoystickAction.RECENTER -> { recenter(); "Map recentered" }
@@ -828,7 +856,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             // "Indira Enclave" when actually at "Isha"). trackProgress is still used
             // for nav distances + off-route/reroute detection (ns.offRoute), just not
             // to move the displayed marker.
-            if (loc.speed < 0.5f) heading = ns.heading
+            // Network fixes commonly have no bearing (and expose 0°). In that case use
+            // the route segment direction so heading-up look-ahead stays on the road.
+            if (!headingKnown) heading = ns.heading
             val speed = if (loc.speed > 0.5f) loc.speed.toDouble() else 11.0
             // Smooth the ETA so it doesn't flicker every second with raw speed; recompute the
             // absolute arrival clock only every 5 s so "arrives 1:32 PM" stays steady.
@@ -840,9 +870,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 etaArrivalMs = nowMs + (smoothEtaSec * 1000).toLong()
                 lastArrivalCalcMs = nowMs
             }
-            // Feed the dash's own turn-by-turn widget with the real upcoming maneuver,
-            // next-turn + total distances, and arrival time. This same live glyph is
-            // patched into both dashboard display modes by DashSession.
+            // Feed the dash's own turn-by-turn widget with the imminent and following
+            // maneuvers, next-turn + total distances, and arrival time. DashSession
+            // patches both native dashboard windows from this same live state.
             val (pv, pu) = toDashDistance(ns.nextTurnM)
             val (tv, tu) = toDashDistance(ns.remainingM)
             val arrival = java.util.Calendar.getInstance().apply {
@@ -852,15 +882,16 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 arrival.get(java.util.Calendar.HOUR_OF_DAY), arrival.get(java.util.Calendar.MINUTE)
             )
             session.updateNavInfo(
-                ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
+                ns.currentManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
                 pv,
                 pu,
                 tv,
                 tu,
                 etaHHMM,
+                secondaryManeuver = ns.nextManeuver?.dashCode ?: DashCommands.NAV_MANEUVER_CONTINUE,
             )
             // Spoken/chime turn guidance (no-op when voice mode is OFF).
-            voice.maybeAnnounce(ns.nextManeuver, ns.nextTurnM, ns.remainingM)
+            voice.maybeAnnounce(ns.currentManeuver, ns.nextTurnM, ns.remainingM)
         } else if (loc != null && dLat != null && dLng != null) {
             remainingM = GeoPoint.distMeters(
                 GeoPoint(loc.latitude, loc.longitude), GeoPoint(dLat, dLng)
@@ -896,8 +927,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             etaMinutes = etaSec?.let { (it / 60.0).toInt() },
             roadName = if (!rerouting) guidance?.roadName ?: _ui.value.roadName else _ui.value.roadName,
             currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.currentManeuver else _ui.value.currentManeuver,
-            nextManeuver = if (!rerouting) guidance?.nextManeuver?.instruction ?: _ui.value.nextManeuver else _ui.value.nextManeuver,
-            nextManeuverDistance = if (!rerouting) guidance?.nextManeuverDistanceM?.let(::fmtDist) ?: _ui.value.nextManeuverDistance else _ui.value.nextManeuverDistance,
+            // Only retain preview data during an active reroute. A normal exhausted
+            // preview must disappear instead of duplicating the prior instruction.
+            nextManeuver = if (rerouting) _ui.value.nextManeuver else guidance?.nextManeuver?.instruction,
+            nextManeuverDistance = if (rerouting) _ui.value.nextManeuverDistance else guidance?.nextManeuverDistanceM?.let(::fmtDist),
             rerouting = rerouting,
             arrivalTime = arrivalTime ?: _ui.value.arrivalTime,
             maneuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: _ui.value.maneuver else _ui.value.maneuver,
@@ -958,6 +991,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val camHeading = if (haveTarget) camHdg else heading
 
         val sig = buildString {
+            append(_ui.value.dashLayout.name)
             if (r == null && dLat == null && dLng == null) {
                 append("idle:${_ui.value.wallpaperPath}")
                 append(_ui.value.wallpaperKind)
@@ -1076,6 +1110,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
             gpsLost = gpsStatus == GpsStatus.LOST,
+            layout = _ui.value.dashLayout,
+            speedKph = (loc?.speed ?: 0f) * 3.6f,
         )
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
@@ -1118,6 +1154,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             10f,
             callOverlayBackground,
         )
+        call.photo?.takeIf { !it.isRecycled }?.let { photo ->
+            val avatarX = centerX - halfWidth + 24f
+            val avatarY = centerY
+            val save = canvas.save()
+            canvas.clipRect(avatarX - 15f, avatarY - 15f, avatarX + 15f, avatarY + 15f)
+            canvas.drawBitmap(photo, null, android.graphics.RectF(avatarX - 15f, avatarY - 15f, avatarX + 15f, avatarY + 15f), null)
+            canvas.restoreToCount(save)
+        }
         val caller = if (call.caller.length > 16) call.caller.take(15) + "..." else call.caller
         canvas.drawText(caller, centerX, centerY - 2f, callOverlayTitle)
         canvas.drawText("UP answer | DOWN reject", centerX, centerY + 17f, callOverlayLabel)
@@ -1264,12 +1308,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun answerCall(call: IncomingCall) {
         val handled = call.answerIntent?.let { runCatching { it.send() }.isSuccess } ?: false
-        if (!handled) callController.answer()
+        val succeeded = handled || callController.answer()
+        DebugLog.i("DashViewModel") { "Call answer via ${if (handled) "notification action" else "telecom"}: ${if (succeeded) "sent" else "failed"}" }
     }
 
     private fun endCall(call: IncomingCall) {
         val handled = call.declineIntent?.let { runCatching { it.send() }.isSuccess } ?: false
-        if (!handled) callController.hangup()
+        val succeeded = handled || callController.hangup()
+        DebugLog.i("DashViewModel") { "Call end via ${if (handled) "notification action" else "telecom"}: ${if (succeeded) "sent" else "failed"}" }
     }
 
     override fun onCleared() {

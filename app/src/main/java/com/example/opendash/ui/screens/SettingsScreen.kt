@@ -71,6 +71,7 @@ import com.example.opendash.viewmodel.DashViewModel
 import com.example.opendash.data.MapBounds
 import com.example.opendash.data.MapPack
 import com.example.opendash.data.MapPackDownloadState
+import com.example.opendash.dash.DashLayout
 
 private enum class MorePage(val title: String) {
     ROOT("More"),
@@ -297,6 +298,15 @@ fun SettingsScreen(
         SettingsGroup(padding = 6.dp) {
             SettingRow(OpenDashIcons.Power, "Turn phone screen off", "Map keeps streaming to the dash",
                 control = { SettingsToggle(screenOff) { screenOff = it } })
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            SettingRow(OpenDashIcons.Dash, "Dash display layout", dashUi.dashLayout.label,
+                control = { Icon(OpenDashIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) })
+            OpenDashSegmented(
+                DashLayout.entries.map { it.label },
+                dashUi.dashLayout.label,
+                { label -> dashViewModel.setDashLayout(DashLayout.entries.first { it.label == label }) },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            )
             SettingsDivider(Modifier.padding(horizontal = 6.dp))
             SettingRow(OpenDashIcons.Dash, "Keep dash awake", "Prevent Tripper sleep",
                 control = { SettingsToggle(keepAwake) { keepAwake = it } }, last = true)
@@ -670,6 +680,7 @@ fun SettingsScreen(
                         MapPackDownloadState.READY -> "${formatMapBytes(pack.bytes)} stored · updated ${formatMapDate(pack.lastUpdatedMs)}"
                         MapPackDownloadState.DOWNLOADING -> progress ?: "Downloading…"
                         MapPackDownloadState.FAILED -> "Download paused — connect to Wi-Fi or retry"
+                        MapPackDownloadState.NOT_DOWNLOADED -> "Download streets for offline riding"
                         null -> "Download streets for offline riding"
                     },
                     control = {

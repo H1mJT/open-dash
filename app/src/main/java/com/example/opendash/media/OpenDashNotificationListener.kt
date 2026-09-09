@@ -2,6 +2,7 @@ package com.example.opendash.media
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.graphics.Bitmap
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
@@ -24,7 +25,7 @@ class OpenDashNotificationListener : NotificationListenerService() {
 
         val (answer, decline) = extractActions(notification, incoming)
         val caller = callerName(notification).ifBlank { if (incoming) "Call" else "On call" }
-        CallInfoProvider.update(IncomingCall(caller, incoming, answer, decline))
+        CallInfoProvider.update(IncomingCall(caller, incoming, answer, decline, callerPhoto(notification)))
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -65,4 +66,8 @@ class OpenDashNotificationListener : NotificationListenerService() {
             ?.takeIf { it.isNotBlank() }
             ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
     }
+
+    /** Notification.largeIcon is a Bitmap on this API surface, not an Icon. */
+    @Suppress("DEPRECATION")
+    private fun callerPhoto(notification: Notification): Bitmap? = notification.largeIcon
 }

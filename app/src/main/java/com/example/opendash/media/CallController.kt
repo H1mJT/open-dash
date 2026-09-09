@@ -19,8 +19,7 @@ class CallController(private val context: Context) {
         if (!hasPermission() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
         return runCatching {
             @Suppress("MissingPermission")
-            telecom?.acceptRingingCall()
-            true
+            telecom?.let { manager -> manager.acceptRingingCall(); true } ?: false
         }.onFailure { DebugLog.w(TAG) { "Call answer failed: ${it.javaClass.simpleName}" } }
             .getOrDefault(false)
     }
