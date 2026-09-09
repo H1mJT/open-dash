@@ -11,6 +11,10 @@ import com.example.opendash.data.DashWallpaperFit
 import com.example.opendash.data.DashWallpaperKind
 import com.example.opendash.data.DashWallpaperInfo
 import com.example.opendash.data.DashWallpaperStore
+import com.example.opendash.data.JoystickAction
+import com.example.opendash.data.JoystickEvent
+import com.example.opendash.data.JoystickMappingStore
+import com.example.opendash.data.MappingAssignment
 import com.example.opendash.dash.DashKeepAliveService
 import com.example.opendash.dash.DashSession
 import com.example.opendash.dash.DashState
@@ -110,6 +114,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private val powerManager = app.getSystemService(Application.POWER_SERVICE) as PowerManager
     private val mediaInfo = MediaInfoProvider(app)
     private val callController = CallController(app)
+    private val joystickMappings = JoystickMappingStore(app, defaultJoystickMappings())
+    val joystickMapping = joystickMappings.mappings
+    private val _joystickEvents = MutableStateFlow<List<JoystickEvent>>(emptyList())
+    val joystickEvents = _joystickEvents.asStateFlow()
+    private val _captureAction = MutableStateFlow<JoystickAction?>(null)
+    val captureAction = _captureAction.asStateFlow()
+    private val _captureConflict = MutableStateFlow<Pair<Int, JoystickAction>?>(null)
+    val captureConflict = _captureConflict.asStateFlow()
 
     private var encoder: DashEncoder? = null
     private var streamJob: Job? = null
@@ -187,6 +199,16 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         private const val BTN_MAP_ZOOM_OUT = 0x13
         private const val BTN_MEDIA_NEXT = 0x09
         private const val BTN_MEDIA_PREVIOUS = 0x0A
+
+        /** Existing dash protocol codes define only the initial rider-editable mapping. */
+        private fun defaultJoystickMappings() = mapOf(
+            BTN_MAP_ZOOM_IN to JoystickAction.ZOOM_IN,
+            BTN_MAP_ZOOM_OUT to JoystickAction.ZOOM_OUT,
+            BTN_MEDIA_NEXT to JoystickAction.NEXT_TRACK,
+            BTN_MEDIA_PREVIOUS to JoystickAction.PREVIOUS_TRACK,
+            BTN_CALL_ANSWER to JoystickAction.ANSWER_CALL,
+            BTN_CALL_REJECT to JoystickAction.REJECT_CALL,
+        )
     }
 
     /** Project a lat/lng forward [distM] metres along [bearingDeg] (great-circle). */
@@ -251,52 +273,58 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         session.onError = { msg -> _ui.value = _ui.value.copy(errorMessage = msg); refreshStage() }
         session.onButton = { btn ->
             val code = btn.toInt() and 0xFF
-            val call = CallInfoProvider.incomingCall.value
-            val mediaActive = mediaInfo.nowPlaying.value != null
-            val label = when {
-                call?.incoming == true && code == BTN_CALL_ANSWER -> {
-                    answerCall(call)
-                    "Call answered"
+            val defaultAction = defaultJoystickMappings()[code]
+            val mappedAction = joystickMappings.actionFor(code)
+            _joystickEvents.update { (listOf(JoystickEvent(code, System.currentTimeMillis(), defaultAction, mappedAction)) + it).take(100) }
+            val capture = _captureAction.value
+            if (capture != null) {
+                when (val result = joystickMappings.assign(code, capture)) {
+                    MappingAssignment.Saved -> _captureAction.value = null
+                    is MappingAssignment.Conflict -> _captureConflict.value = code to result.existingAction
                 }
-                call != null && code == BTN_CALL_REJECT -> {
-                    endCall(call)
-                    if (call.incoming) "Call rejected" else "Call ended"
-                }
-                isIdleWallpaperMode() && code == BTN_MEDIA_NEXT -> {
-                    cycleWallpaper(1)
-                    "Next wallpaper"
-                }
-                isIdleWallpaperMode() && code == BTN_MEDIA_PREVIOUS -> {
-                    cycleWallpaper(-1)
-                    "Previous wallpaper"
-                }
-                !isIdleWallpaperMode() && mediaActive && code == BTN_MEDIA_NEXT -> {
-                    mediaInfo.skipNext()
-                    "Next track"
-                }
-                !isIdleWallpaperMode() && mediaActive && code == BTN_MEDIA_PREVIOUS -> {
-                    mediaInfo.skipPrevious()
-                    "Previous track"
-                }
-                code == BTN_MAP_ZOOM_IN || (!mediaActive && code == BTN_MEDIA_NEXT) -> {
-                    zoomIn()
-                    "Zoom in"
-                }
-                code == BTN_MAP_ZOOM_OUT || (!mediaActive && code == BTN_MEDIA_PREVIOUS) -> {
-                    zoomOut()
-                    "Zoom out"
-                }
-                isIdleWallpaperMode() && isNextWallpaperButton(code) -> {
-                    cycleWallpaper(1)
-                    "Next wallpaper"
-                }
-                isIdleWallpaperMode() && isPreviousWallpaperButton(code) -> {
-                    cycleWallpaper(-1)
-                    "Previous wallpaper"
-                }
-                else -> "code 0x${code.toString(16).uppercase()}"
+                _ui.value = _ui.value.copy(lastButton = "Captured ${JoystickMappingStore.formatCode(code)}")
+            } else {
+                val label = performJoystickAction(mappedAction, code)
+                _ui.value = _ui.value.copy(lastButton = label)
             }
-            _ui.value = _ui.value.copy(lastButton = label)
+        }
+    }
+
+    fun beginJoystickCapture(action: JoystickAction) { _captureConflict.value = null; _captureAction.value = action }
+    fun cancelJoystickCapture() { _captureAction.value = null; _captureConflict.value = null }
+    fun confirmJoystickReplacement() {
+        val conflict = _captureConflict.value ?: return
+        val action = _captureAction.value ?: return
+        joystickMappings.assign(conflict.first, action, replaceConflict = true)
+        _captureConflict.value = null
+        _captureAction.value = null
+    }
+    fun assignJoystick(code: Int, action: JoystickAction, replaceConflict: Boolean = false): MappingAssignment =
+        joystickMappings.assign(code, action, replaceConflict)
+    fun resetJoystickMappings() = joystickMappings.resetToDefaults()
+
+    private fun performJoystickAction(action: JoystickAction?, code: Int): String {
+        val call = CallInfoProvider.incomingCall.value
+        val mediaActive = mediaInfo.nowPlaying.value != null
+        return when (action) {
+            JoystickAction.ANSWER_CALL -> if (call?.incoming == true) { answerCall(call); "Call answered" } else "Answer ignored"
+            JoystickAction.REJECT_CALL -> if (call != null) { endCall(call); if (call.incoming) "Call rejected" else "Call ended" } else "Reject ignored"
+            JoystickAction.NEXT_TRACK -> when {
+                isIdleWallpaperMode() -> { cycleWallpaper(1); "Next wallpaper" }
+                mediaActive -> { mediaInfo.skipNext(); "Next track" }
+                else -> { zoomIn(); "Zoom in" }
+            }
+            JoystickAction.PREVIOUS_TRACK -> when {
+                isIdleWallpaperMode() -> { cycleWallpaper(-1); "Previous wallpaper" }
+                mediaActive -> { mediaInfo.skipPrevious(); "Previous track" }
+                else -> { zoomOut(); "Zoom out" }
+            }
+            JoystickAction.ZOOM_IN -> { zoomIn(); "Zoom in" }
+            JoystickAction.ZOOM_OUT -> { zoomOut(); "Zoom out" }
+            JoystickAction.RECENTER -> { recenter(); "Map recentered" }
+            JoystickAction.TOGGLE_HEADING_UP -> { toggleHeadingUp(); "Heading-up ${if (headingUp) "on" else "off"}" }
+            JoystickAction.EXIT_NAVIGATION -> { exitNavigation(); "Navigation exited" }
+            null -> "code ${JoystickMappingStore.formatCode(code)}"
         }
     }
 
