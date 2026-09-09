@@ -6,6 +6,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Looper
+import android.os.SystemClock
 import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,15 +23,26 @@ class LocationTracker(context: Context) {
 
     private val _location = MutableStateFlow<Location?>(null)
     val location = _location.asStateFlow()
+    @Volatile private var lastFixElapsedRealtimeMs: Long? = null
 
     private val listener = LocationListener { loc ->
         val cur = _location.value
         if (acceptFix(cur, loc)) {
-            _location.value = loc
+            publish(loc)
             DebugLog.d(TAG) { "fix ${loc.provider} acc=${loc.accuracy} (${loc.latitude},${loc.longitude})" }
         } else {
             DebugLog.d(TAG) { "REJECT ${loc.provider} acc=${loc.accuracy} dt=${loc.time - (cur?.time ?: 0)}ms" }
         }
+    }
+
+    private fun publish(loc: Location) {
+        _location.value = loc
+        // Location.time is wall-clock time and can be corrected by the network while a
+        // ride is in progress. Use Android's monotonic fix timestamp for freshness so a
+        // clock correction cannot make a newly received GPS fix appear stale.
+        lastFixElapsedRealtimeMs = loc.elapsedRealtimeNanos
+            .takeIf { it > 0L }
+            ?.div(1_000_000L)
     }
 
     private var rejectStreak = 0
@@ -71,8 +83,9 @@ class LocationTracker(context: Context) {
     fun start() {
         if (running) return
         try {
-            _location.value = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            val lastKnown = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (lastKnown != null) publish(lastKnown)
             // GPS for accuracy + heading; NETWORK as a fallback while GPS warms up.
             // minDistance=0: keep GPS fixes flowing every second even when parked.
             // With a minimum distance, GPS goes quiet while stationary, its last fix
@@ -107,4 +120,8 @@ class LocationTracker(context: Context) {
     } catch (e: Exception) {
         null
     }
+
+    /** Age of the accepted fix, based on elapsed real time rather than wall-clock time. */
+    fun fixAgeMs(nowElapsedRealtimeMs: Long = SystemClock.elapsedRealtime()): Long =
+        LocationFixFreshness.ageMs(lastFixElapsedRealtimeMs, nowElapsedRealtimeMs)
 }

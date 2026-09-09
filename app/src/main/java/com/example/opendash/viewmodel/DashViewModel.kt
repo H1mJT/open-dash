@@ -49,6 +49,8 @@ enum class ConnStage { OFFLINE, WIFI, AUTH, STREAMING, ERROR }
 enum class GpsStatus { GOOD, WEAK, LOST }
 enum class OfflineStatus { ONLINE, OFFLINE_MAP_READY, OFFLINE_ROUTE_ONLY, INSUFFICIENT_COVERAGE }
 
+private const val GPS_LOST_AFTER_MS = 10_000L
+
 data class JoystickMappingConflict(
     val capturedCode: Int,
     val existingCode: Int,
@@ -901,9 +903,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // Recompute the route if the rider has clearly left it for a few seconds.
         maybeReroute(offRoute, loc)
 
-        val fixAgeMs = loc?.let { System.currentTimeMillis() - it.time } ?: Long.MAX_VALUE
+        // Keep the lost threshold aligned with LocationTracker's GPS-to-network fallback:
+        // a fix should not be marked lost while the tracker is still retaining it over a
+        // lower-quality network update. LocationTracker uses a monotonic timestamp, so
+        // wall-clock corrections cannot cause a false "GPS lost" warning.
+        val fixAgeMs = location.fixAgeMs()
         gpsStatus = when {
-            loc == null || fixAgeMs > 4_000L -> GpsStatus.LOST
+            loc == null || fixAgeMs > GPS_LOST_AFTER_MS -> GpsStatus.LOST
             loc.accuracy > 25f -> GpsStatus.WEAK
             else -> GpsStatus.GOOD
         }
