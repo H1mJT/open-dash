@@ -35,11 +35,11 @@ fun JoystickDebugScreen(vm: DashViewModel, onBack: () -> Unit) {
     var selected by remember { mutableStateOf(JoystickAction.ZOOM_IN) }
     var expanded by remember { mutableStateOf(false) }
 
-    conflict?.let { (code, existing) ->
+    conflict?.let { conflict ->
         AlertDialog(
             onDismissRequest = vm::cancelJoystickCapture,
             title = { Text("Replace mapping?") },
-            text = { Text("${JoystickMappingStore.formatCode(code)} is mapped to ${existing.label}. Replace it with ${capture?.label}?") },
+            text = { Text("${JoystickMappingStore.formatCode(conflict.existingCode)} is mapped to ${conflict.existingAction.label}. Move ${capture?.label} to ${JoystickMappingStore.formatCode(conflict.capturedCode)} and replace that mapping?") },
             confirmButton = { TextButton(onClick = vm::confirmJoystickReplacement) { Text("Replace") } },
             dismissButton = { TextButton(onClick = vm::cancelJoystickCapture) { Text("Cancel") } },
         )

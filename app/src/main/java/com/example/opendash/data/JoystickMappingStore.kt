@@ -30,7 +30,7 @@ data class JoystickEvent(
 
 sealed interface MappingAssignment {
     data object Saved : MappingAssignment
-    data class Conflict(val existingAction: JoystickAction) : MappingAssignment
+    data class Conflict(val existingCode: Int, val existingAction: JoystickAction) : MappingAssignment
 }
 
 class JoystickMappingStore(context: Context, private val defaults: Map<Int, JoystickAction>) {
@@ -44,7 +44,10 @@ class JoystickMappingStore(context: Context, private val defaults: Map<Int, Joys
         val existing = _mappings.value[code]
         val actionCode = _mappings.value.entries.firstOrNull { it.value == action && it.key != code }?.key
         if ((existing != null && existing != action) || actionCode != null) {
-            if (!replaceConflict) return MappingAssignment.Conflict(existing ?: action)
+            if (!replaceConflict) {
+                val conflictCode = if (existing != null && existing != action) code else actionCode!!
+                return MappingAssignment.Conflict(conflictCode, _mappings.value.getValue(conflictCode))
+            }
         }
         // A mapping is one-to-one: replacing either side removes its previous partner.
         val updated = _mappings.value.toMutableMap().apply {

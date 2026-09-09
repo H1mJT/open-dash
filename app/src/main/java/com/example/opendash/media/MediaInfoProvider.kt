@@ -7,6 +7,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.SystemClock
 import android.provider.Settings
 import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,7 +68,16 @@ class MediaInfoProvider(private val context: Context) {
         val state = controller?.playbackState ?: return false
         if (state.actions and PlaybackState.ACTION_SEEK_TO == 0L) return false
         val duration = controller?.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-        controller?.transportControls?.seekTo((state.position + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L)))
+        val elapsedMs = (SystemClock.elapsedRealtime() - state.lastPositionUpdateTime).coerceAtLeast(0L)
+        val livePosition = if (state.state == PlaybackState.STATE_PLAYING) {
+            state.position + (elapsedMs * state.playbackSpeed).toLong()
+        } else {
+            state.position
+        }
+        val target = (livePosition + deltaMs).coerceAtLeast(0L).let { position ->
+            if (duration > 0L) position.coerceAtMost(duration) else position
+        }
+        controller?.transportControls?.seekTo(target)
         true
     }.getOrDefault(false)
 
