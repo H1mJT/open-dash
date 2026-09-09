@@ -41,10 +41,12 @@ import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 
 enum class ConnStage { OFFLINE, WIFI, AUTH, STREAMING, ERROR }
 enum class GpsStatus { GOOD, WEAK, LOST }
+enum class OfflineStatus { ONLINE, OFFLINE_MAP_READY, OFFLINE_ROUTE_ONLY, INSUFFICIENT_COVERAGE }
 
 data class DashUiState(
     val stage: ConnStage = ConnStage.OFFLINE,
@@ -93,6 +95,7 @@ data class DashUiState(
     val wallpaperSaving: Boolean = false,
     val wallpaperError: String? = null,
     val pendingPairingSsid: String? = null,
+    val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -128,6 +131,16 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var mediaObserveJob: Job? = null
 
     private var userWantsConnection = false
+
+    init {
+        viewModelScope.launch {
+            tiles.packStore.packs.collect { packs ->
+                if (route?.isOffline != true) _ui.update {
+                    it.copy(offlineStatus = if (packs.any { p -> p.state == com.example.opendash.data.MapPackDownloadState.READY }) OfflineStatus.OFFLINE_MAP_READY else OfflineStatus.INSUFFICIENT_COVERAGE)
+                }
+            }
+        }
+    }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
     @Volatile private var destLat: Double? = null
@@ -599,9 +612,16 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         tiles.prefetch(lat, lng, loc?.latitude, loc?.longitude)
     }
 
+    val mapPacks = tiles.packStore.packs
+    val wifiOnlyMapDownloads = tiles.packStore.wifiOnly
+    fun downloadMapPack(pack: com.example.opendash.data.MapPack) = tiles.downloadPack(pack)
+    fun deleteMapPack(id: String) = tiles.deletePack(id)
+    fun setWifiOnlyMapDownloads(value: Boolean) = tiles.packStore.setWifiOnly(value)
+
     fun setDestination(name: String, lat: Double?, lng: Double?) {
         _ui.value = _ui.value.copy(
             destinationName = name, hasRoute = false,
+            offlineStatus = OfflineStatus.ONLINE,
             destLatLng = if (lat != null && lng != null) lat to lng else null,
             routePoints = emptyList(),
             roadName = null,
@@ -666,11 +686,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            val r = Router.route(GeoPoint(loc.latitude, loc.longitude), GeoPoint(destLatV, destLngV))
+            val r = Router.route(getApplication(), GeoPoint(loc.latitude, loc.longitude), GeoPoint(destLatV, destLngV))
             if (r != null) {
                 route = r
                 tiles.prefetchRoute(r.geometry)
-                _ui.value = _ui.value.copy(hasRoute = true, routePoints = r.geometry)
+                _ui.value = _ui.value.copy(hasRoute = true, routePoints = r.geometry, offlineStatus = if (r.isOffline) OfflineStatus.OFFLINE_ROUTE_ONLY else OfflineStatus.ONLINE)
                 DebugLog.i("DashViewModel") { "Route ready: ${r.geometry.size} pts, ${r.totalMeters.toInt()} m" }
             } else {
                 DebugLog.w("DashViewModel") { "Router returned null" }
@@ -982,13 +1002,13 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         rerouting = true
         DebugLog.i("DashViewModel") { "Off-route ${(now - offRouteSince) / 1000}s → rerouting" }
         viewModelScope.launch {
-            val r = Router.route(GeoPoint(loc.latitude, loc.longitude), GeoPoint(dLat, dLng))
+            val r = Router.route(getApplication(), GeoPoint(loc.latitude, loc.longitude), GeoPoint(dLat, dLng))
             if (r != null) {
                 route = r
                 progressM = 0.0
                 offRouteSince = 0L
                 tiles.prefetchRoute(r.geometry)
-                _ui.value = _ui.value.copy(hasRoute = true, routePoints = r.geometry)
+                _ui.value = _ui.value.copy(hasRoute = true, routePoints = r.geometry, offlineStatus = if (r.isOffline) OfflineStatus.OFFLINE_ROUTE_ONLY else OfflineStatus.ONLINE)
                 DebugLog.i("DashViewModel") { "Reroute ok: ${r.geometry.size} pts, ${r.totalMeters.toInt()} m" }
             } else {
                 DebugLog.w("DashViewModel") { "Reroute failed (no internet?)" }

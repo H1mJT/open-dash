@@ -68,6 +68,9 @@ import com.example.opendash.data.OpenDashCurrency
 import com.example.opendash.viewmodel.AuthViewModel
 import com.example.opendash.viewmodel.ConnectionState
 import com.example.opendash.viewmodel.DashViewModel
+import com.example.opendash.data.MapBounds
+import com.example.opendash.data.MapPack
+import com.example.opendash.data.MapPackDownloadState
 
 private enum class MorePage(val title: String) {
     ROOT("More"),
@@ -92,6 +95,8 @@ fun SettingsScreen(
 ) {
     val auth by authViewModel.state.collectAsState()
     val dashUi by dashViewModel.ui.collectAsState()
+    val mapPacks by dashViewModel.mapPacks.collectAsState()
+    val wifiOnlyMapDownloads by dashViewModel.wifiOnlyMapDownloads.collectAsState()
     val email = auth.email ?: "Not signed in"
     val initials = remember(auth.email, auth.displayName) {
         val src = auth.displayName?.takeIf { it.isNotBlank() } ?: auth.email ?: "?"
@@ -641,6 +646,46 @@ fun SettingsScreen(
             )
         }
 
+        SectionLabel("Offline map packs")
+        SettingsGroup(padding = 6.dp) {
+            SettingRow(
+                OpenDashIcons.Wifi,
+                "Wi-Fi only downloads",
+                "Avoid using mobile data for regional maps",
+                control = { SettingsToggle(wifiOnlyMapDownloads) { dashViewModel.setWifiOnlyMapDownloads(it) } },
+            )
+            SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            val catalog = listOf(
+                MapPack("bengaluru", "Bengaluru", MapBounds(12.83, 77.45, 13.15, 77.78), 11, 14),
+                MapPack("mumbai", "Mumbai", MapBounds(18.84, 72.72, 19.30, 73.15), 11, 14),
+                MapPack("delhi", "Delhi NCR", MapBounds(28.35, 76.75, 28.95, 77.45), 11, 14),
+            )
+            catalog.forEachIndexed { index, option ->
+                val pack = mapPacks.firstOrNull { it.id == option.id }
+                val progress = pack?.let { if (it.totalTiles == 0) "Preparing…" else "${it.downloadedTiles}/${it.totalTiles} tiles" }
+                SettingRow(
+                    OpenDashIcons.Navi,
+                    option.name,
+                    when (pack?.state) {
+                        MapPackDownloadState.READY -> "${formatMapBytes(pack.bytes)} stored · updated ${formatMapDate(pack.lastUpdatedMs)}"
+                        MapPackDownloadState.DOWNLOADING -> progress ?: "Downloading…"
+                        MapPackDownloadState.FAILED -> "Download paused — connect to Wi-Fi or retry"
+                        null -> "Download streets for offline riding"
+                    },
+                    control = {
+                        OpenDashBtn(
+                            if (pack?.state == MapPackDownloadState.READY) "Delete" else "Download",
+                            onClick = { if (pack?.state == MapPackDownloadState.READY) dashViewModel.deleteMapPack(option.id) else dashViewModel.downloadMapPack(option) },
+                            variant = if (pack?.state == MapPackDownloadState.READY) BtnVariant.Ghost else BtnVariant.Secondary,
+                            size = BtnSize.Sm,
+                        )
+                    },
+                    last = index == catalog.lastIndex,
+                )
+                if (index != catalog.lastIndex) SettingsDivider(Modifier.padding(horizontal = 6.dp))
+            }
+        }
+
         SectionLabel("Units")
         SettingsGroup(padding = 14.dp) {
             OpenDashSegmented(listOf("Kilometres", "Miles"), units, { units = it }, Modifier.fillMaxWidth())
@@ -737,6 +782,13 @@ fun SettingsScreen(
         )
     }
 }
+
+private fun formatMapBytes(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
+}
+private fun formatMapDate(time: Long): String = if (time == 0L) "now" else java.text.DateFormat.getDateInstance(java.text.DateFormat.SHORT).format(java.util.Date(time))
 
 @Composable
 private fun SettingsGroup(

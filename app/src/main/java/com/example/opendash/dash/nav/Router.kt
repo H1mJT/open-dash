@@ -1,5 +1,6 @@
 package com.example.opendash.dash.nav
 
+import android.content.Context
 import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +18,7 @@ object Router {
     private const val BASE = "https://router.project-osrm.org/route/v1/driving"
     private const val UA = "OpenDash/1.1 (personal motorcycle nav; single user)"
 
-    suspend fun route(from: GeoPoint, to: GeoPoint): Route? = withContext(Dispatchers.IO) {
+    suspend fun route(context: Context, from: GeoPoint, to: GeoPoint): Route? = withContext(Dispatchers.IO) {
         val url = "$BASE/${from.lng},${from.lat};${to.lng},${to.lat}" +
                 "?overview=full&geometries=polyline&steps=true&annotations=false"
         try {
@@ -28,10 +29,10 @@ object Router {
             }
             val body = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
             conn.disconnect()
-            parse(body)
+            parse(body)?.also { RouteCache(context).save(it, to) }
         } catch (e: Exception) {
             DebugLog.w(TAG) { "route() failed: ${e.message}" }
-            null
+            RouteCache(context).compatible(to)?.copy(isOffline = true)
         }
     }
 
@@ -142,4 +143,26 @@ object Router {
         }
         return best
     }
+}
+
+/** Persists exactly the guidance data needed to continue an active trip offline. */
+private class RouteCache(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("active_route", Context.MODE_PRIVATE)
+    fun save(route: Route, destination: GeoPoint) {
+        val o = JSONObject().put("destLat", destination.lat).put("destLng", destination.lng)
+            .put("meters", route.totalMeters).put("seconds", route.totalSeconds)
+        o.put("geometry", org.json.JSONArray().apply { route.geometry.forEach { put(org.json.JSONArray().put(it.lat).put(it.lng)) } })
+        o.put("cumulative", org.json.JSONArray().apply { route.cumulative.forEach { put(it) } })
+        o.put("maneuvers", org.json.JSONArray().apply { route.maneuvers.forEach { m -> put(JSONObject().put("type", m.type.name).put("instruction", m.instruction).put("road", m.roadName).put("ref", m.roadRef).put("raw", m.rawType).put("modifier", m.modifier).put("lat", m.location.lat).put("lng", m.location.lng).put("cum", m.cumulativeMeters)) } })
+        prefs.edit().putString("route", o.toString()).apply()
+    }
+    fun compatible(destination: GeoPoint): Route? = runCatching {
+        val o = JSONObject(prefs.getString("route", null) ?: return null)
+        val cachedDest = GeoPoint(o.getDouble("destLat"), o.getDouble("destLng"))
+        if (GeoPoint.distMeters(cachedDest, destination) > 500) return null
+        val g = o.getJSONArray("geometry"); val geometry = List(g.length()) { i -> g.getJSONArray(i).let { GeoPoint(it.getDouble(0), it.getDouble(1)) } }
+        val c = o.getJSONArray("cumulative"); val cumulative = DoubleArray(c.length()) { c.getDouble(it) }
+        val ms = o.getJSONArray("maneuvers"); val maneuvers = List(ms.length()) { i -> ms.getJSONObject(i).let { m -> Maneuver(ManeuverType.valueOf(m.getString("type")), m.getString("instruction"), m.optString("road").takeIf { it.isNotBlank() && it != "null" }, m.optString("ref").takeIf { it.isNotBlank() && it != "null" }, rawType = m.optString("raw").takeIf { it.isNotBlank() && it != "null" }, modifier = m.optString("modifier").takeIf { it.isNotBlank() && it != "null" }, location = GeoPoint(m.getDouble("lat"), m.getDouble("lng")), cumulativeMeters = m.getDouble("cum")) } }
+        Route(geometry, maneuvers, o.getDouble("meters"), o.getDouble("seconds"), cumulative, true)
+    }.getOrNull()
 }

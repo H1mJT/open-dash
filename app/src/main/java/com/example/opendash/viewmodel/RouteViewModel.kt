@@ -141,7 +141,7 @@ class RouteViewModel(app: Application) : AndroidViewModel(app) {
 
         _state.value = _state.value.copy(routing = true)
         viewModelScope.launch {
-            val r = Router.route(
+            val r = Router.route(getApplication(),
                 GeoPoint(origin.latitude, origin.longitude),
                 GeoPoint(destLat, destLng),
             )

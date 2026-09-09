@@ -8,6 +8,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.util.LruCache
 import com.example.opendash.dash.nav.GeoPoint
+import com.example.opendash.data.MapPack
+import com.example.opendash.data.MapPackDownloadState
+import com.example.opendash.data.MapPackStore
 import com.example.opendash.util.DebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,8 +50,11 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
     }
 
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    // Cache dir per tile source so a source switch doesn't serve stale tiles.
-    private val diskDir = File(context.cacheDir, "tiles_gmaps").apply { mkdirs() }
+    // filesDir survives cache cleanup. Regional packs get independent folders, making
+    // quota eviction and a rider's explicit deletion deterministic.
+    private val diskDir = File(context.filesDir, "tiles_gmaps").apply { mkdirs() }
+    private val packRoot = File(context.filesDir, "map_packs").apply { mkdirs() }
+    val packStore = MapPackStore(context)
     private val memory = LruCache<String, Bitmap>(120)
     private val inflight = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var lastFetchAt = 0L
@@ -128,6 +134,42 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
         }
     }
 
+    /** Download a bounded regional pack.  Metadata is committed after every tile so a
+     * killed process can resume or delete it without leaving an unaccounted cache. */
+    fun downloadPack(pack: MapPack) {
+        scope.launch(Dispatchers.IO) {
+            if (packStore.wifiOnly.value && !isWifiConnected()) {
+                packStore.upsert(pack.copy(state = MapPackDownloadState.FAILED))
+                return@launch
+            }
+            val keys = packKeys(pack)
+            var bytes = pack.bytes; var done = 0
+            packStore.upsert(pack.copy(state = MapPackDownloadState.DOWNLOADING, totalTiles = keys.size, downloadedTiles = 0))
+            for ((z, x, y, key) in keys) {
+                val target = packFile(pack.id, key)
+                if (target.exists()) { bytes += target.length(); done++ }
+                else {
+                    val data = fetchBytes(z, x, y)
+                    if (data != null) { target.parentFile?.mkdirs(); target.writeBytes(data); bytes += data.size; done++ }
+                }
+                if (done % 8 == 0) packStore.upsert(pack.copy(state = MapPackDownloadState.DOWNLOADING, bytes = bytes, downloadedTiles = done, totalTiles = keys.size, lastUpdatedMs = System.currentTimeMillis()))
+            }
+            enforceQuota(pack.id)
+            packStore.upsert(pack.copy(state = MapPackDownloadState.READY, bytes = directoryBytes(packFile(pack.id, "x").parentFile!!), downloadedTiles = done, totalTiles = keys.size, lastUpdatedMs = System.currentTimeMillis()))
+        }
+    }
+
+    fun deletePack(id: String) { scope.launch(Dispatchers.IO) { File(packRoot, id).deleteRecursively(); packStore.remove(id) } }
+
+    private fun packKeys(pack: MapPack): List<TileKey> = buildList {
+        for (z in pack.minZoom..pack.maxZoom) {
+            val left = Mercator.lngToTileX(pack.bounds.west, z).toInt(); val right = Mercator.lngToTileX(pack.bounds.east, z).toInt()
+            val top = Mercator.latToTileY(pack.bounds.north, z).toInt(); val bottom = Mercator.latToTileY(pack.bounds.south, z).toInt()
+            for (x in left..right) for (y in top..bottom) add(TileKey(z, x, y, "$z/$x/$y"))
+        }
+    }.take(MAX_PREFETCH_TILES)
+    private data class TileKey(val z: Int, val x: Int, val y: Int, val key: String)
+
     private fun prefetchAround(lat: Double, lng: Double, z: Int, radius: Int): Int {
         val cx = Mercator.lngToTileX(lng, z).toInt()
         val cy = Mercator.latToTileY(lat, z).toInt()
@@ -144,8 +186,15 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
     // ── Internals ─────────────────────────────────────────────────────────
 
     private fun diskFile(key: String) = File(diskDir, key.replace('/', '_') + ".png")
+    private fun packFile(id: String, key: String) = File(File(packRoot, id), key.replace('/', '_') + ".png")
 
     private fun loadDisk(key: String): Bitmap? {
+        // Pack cache is always checked first: no network is touched when a selected
+        // region contains the requested tile.
+        packStore.packs.value.asReversed().forEach { pack ->
+            val f = packFile(pack.id, key)
+            if (f.exists()) return BitmapFactory.decodeFile(f.absolutePath)
+        }
         val f = diskFile(key)
         if (!f.exists()) return null
         return BitmapFactory.decodeFile(f.absolutePath)
@@ -162,6 +211,14 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
         if (wait > 0) try { Thread.sleep(wait) } catch (_: InterruptedException) {}
         lastFetchAt = System.currentTimeMillis()
 
+        val bytes = fetchBytes(z, x, y) ?: return null
+        diskFile(key).writeBytes(bytes)
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    private fun fetchBytes(z: Int, x: Int, y: Int): ByteArray? {
+        val max = 1 shl z
+        if (y < 0 || y >= max) return null
         val net = internetNetwork()
         return try {
             val url = URL(URL_TEMPLATE.format(z, x, ((y % max) + max) % max))
@@ -171,11 +228,21 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
             conn.readTimeout = 8_000
             val bytes = conn.inputStream.use { it.readBytes() }
             conn.disconnect()
-            diskFile(key).writeBytes(bytes)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            bytes
         } catch (e: Exception) {
-            DebugLog.w(TAG) { "Tile $key fetch failed: ${e.message}" }
+            DebugLog.w(TAG) { "Tile $z/$x/$y fetch failed: ${e.message}" }
             null
+        }
+    }
+
+    private fun isWifiConnected(): Boolean = cm.allNetworks.any { n -> cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
+    private fun directoryBytes(dir: File): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    private fun enforceQuota(keepId: String) {
+        val quota = 350L * 1024 * 1024
+        var total = directoryBytes(packRoot)
+        packStore.packs.value.filter { it.id != keepId }.sortedBy { it.lastUpdatedMs }.forEach { p ->
+            if (total <= quota) return@forEach
+            File(packRoot, p.id).deleteRecursively(); packStore.remove(p.id); total = directoryBytes(packRoot)
         }
     }
 

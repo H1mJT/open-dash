@@ -33,6 +33,7 @@ import com.example.opendash.ui.components.*
 import com.example.opendash.ui.theme.*
 import com.example.opendash.viewmodel.ConnStage
 import com.example.opendash.viewmodel.DashViewModel
+import com.example.opendash.viewmodel.OfflineStatus
 import kotlinx.coroutines.delay
 
 @Composable
@@ -138,6 +139,17 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     }
                 }
             },
+        )
+
+        OpenDashChip(
+            when (ui.offlineStatus) {
+                OfflineStatus.ONLINE -> "Online"
+                OfflineStatus.OFFLINE_MAP_READY -> "Offline map ready"
+                OfflineStatus.OFFLINE_ROUTE_ONLY -> "Offline route only"
+                OfflineStatus.INSUFFICIENT_COVERAGE -> "Insufficient offline coverage"
+            },
+            if (ui.offlineStatus == OfflineStatus.INSUFFICIENT_COVERAGE) ChipTone.Warn else ChipTone.Neutral,
+            modifier = Modifier.padding(bottom = 10.dp),
         )
 
         // Single connection card (hidden once streaming)
