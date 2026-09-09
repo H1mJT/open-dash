@@ -82,6 +82,8 @@ data class Route(
     val totalSeconds: Double,
     /** Cumulative distance (m) at each geometry vertex — same length as [geometry]. */
     val cumulative: DoubleArray,
+    /** True when restored after a routing request could not reach a router. */
+    val isOffline: Boolean = false,
 ) {
     val destination: GeoPoint? get() = geometry.lastOrNull()
 }
