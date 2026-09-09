@@ -657,6 +657,13 @@ fun SettingsScreen(
         }
 
         SectionLabel("Offline map packs")
+        Text(
+            "Maps are downloaded here. Route guidance and up to three alternatives are saved automatically when you plan a trip online; offline rerouting can only use those saved alternatives.",
+            color = TextMid,
+            fontSize = 12.sp,
+            fontFamily = GeistFamily,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
         SettingsGroup(padding = 6.dp) {
             SettingRow(
                 OpenDashIcons.Wifi,
