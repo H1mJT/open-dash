@@ -16,6 +16,7 @@ import com.example.opendash.data.JoystickEvent
 import com.example.opendash.data.JoystickMappingStore
 import com.example.opendash.data.MappingAssignment
 import com.example.opendash.dash.DashKeepAliveService
+import com.example.opendash.dash.DashLayout
 import com.example.opendash.dash.DashSession
 import com.example.opendash.dash.DashState
 import com.example.opendash.dash.DashWifiManager
@@ -96,6 +97,7 @@ data class DashUiState(
     val wallpaperError: String? = null,
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
+    val dashLayout: DashLayout = DashLayout.MAP_FIRST,
 )
 
 class DashViewModel(app: Application) : AndroidViewModel(app) {
@@ -133,6 +135,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var userWantsConnection = false
 
     init {
+        _ui.value = _ui.value.copy(dashLayout = dashConfig.layout)
         viewModelScope.launch {
             tiles.packStore.packs.collect { packs ->
                 if (route?.isOffline != true) _ui.update {
@@ -140,6 +143,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    fun setDashLayout(layout: DashLayout) {
+        dashConfig.layout = layout
+        _ui.update { it.copy(dashLayout = layout) }
+        lastSignature = ""
     }
 
     // ── Navigation/map state read by the 4 fps frame loop ──
@@ -332,6 +341,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 mediaActive -> { mediaInfo.skipPrevious(); "Previous track" }
                 else -> { zoomOut(); "Zoom out" }
             }
+            JoystickAction.TOGGLE_PLAYBACK -> if (mediaActive && mediaInfo.togglePlayback()) "Playback toggled" else "Playback unavailable"
+            JoystickAction.SEEK_FORWARD -> if (mediaActive && mediaInfo.seekBy(15_000)) "Forward 15 seconds" else "Seeking unavailable"
+            JoystickAction.SEEK_BACKWARD -> if (mediaActive && mediaInfo.seekBy(-15_000)) "Back 15 seconds" else "Seeking unavailable"
             JoystickAction.ZOOM_IN -> { zoomIn(); "Zoom in" }
             JoystickAction.ZOOM_OUT -> { zoomOut(); "Zoom out" }
             JoystickAction.RECENTER -> { recenter(); "Map recentered" }
@@ -958,6 +970,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val camHeading = if (haveTarget) camHdg else heading
 
         val sig = buildString {
+            append(_ui.value.dashLayout.name)
             if (r == null && dLat == null && dLng == null) {
                 append("idle:${_ui.value.wallpaperPath}")
                 append(_ui.value.wallpaperKind)
@@ -1076,6 +1089,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
             gpsLost = gpsStatus == GpsStatus.LOST,
+            layout = _ui.value.dashLayout,
+            speedKph = (loc?.speed ?: 0f) * 3.6f,
         )
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
@@ -1118,6 +1133,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             10f,
             callOverlayBackground,
         )
+        call.photo?.takeIf { !it.isRecycled }?.let { photo ->
+            val avatarX = centerX - halfWidth + 24f
+            val avatarY = centerY
+            val save = canvas.save()
+            canvas.clipRect(avatarX - 15f, avatarY - 15f, avatarX + 15f, avatarY + 15f)
+            canvas.drawBitmap(photo, null, android.graphics.RectF(avatarX - 15f, avatarY - 15f, avatarX + 15f, avatarY + 15f), null)
+            canvas.restoreToCount(save)
+        }
         val caller = if (call.caller.length > 16) call.caller.take(15) + "..." else call.caller
         canvas.drawText(caller, centerX, centerY - 2f, callOverlayTitle)
         canvas.drawText("UP answer | DOWN reject", centerX, centerY + 17f, callOverlayLabel)
@@ -1264,12 +1287,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun answerCall(call: IncomingCall) {
         val handled = call.answerIntent?.let { runCatching { it.send() }.isSuccess } ?: false
-        if (!handled) callController.answer()
+        val succeeded = handled || callController.answer()
+        DebugLog.i("DashViewModel") { "Call answer via ${if (handled) "notification action" else "telecom"}: ${if (succeeded) "sent" else "failed"}" }
     }
 
     private fun endCall(call: IncomingCall) {
         val handled = call.declineIntent?.let { runCatching { it.send() }.isSuccess } ?: false
-        if (!handled) callController.hangup()
+        val succeeded = handled || callController.hangup()
+        DebugLog.i("DashViewModel") { "Call end via ${if (handled) "notification action" else "telecom"}: ${if (succeeded) "sent" else "failed"}" }
     }
 
     override fun onCleared() {

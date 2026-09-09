@@ -10,6 +10,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import com.example.opendash.dash.nav.GeoPoint
+import com.example.opendash.dash.DashLayout
 
 /**
  * Draws the navigation frame for the Tripper Dash (526 × 300).
@@ -47,6 +48,8 @@ class MapRenderer(private val tiles: TileProvider) {
         val etaSecondary: String? = null,  // smaller line, e.g. "18 km · 13:32"
         val gpsWeak: Boolean = false,
         val gpsLost: Boolean = false,
+        val layout: DashLayout = DashLayout.MAP_FIRST,
+        val speedKph: Float = 0f,
     )
 
     private val bgColor   = Color.rgb(229, 227, 223) // Google Maps land colour, behind missing tiles
@@ -213,16 +216,41 @@ class MapRenderer(private val tiles: TileProvider) {
             tmpRect.set(24f, 14f, w - 24f, 58f)
             canvas.drawRoundRect(tmpRect, 12f, 12f, reroutePaint)
             canvas.drawText("Off route — recalculating", 38f, 42f, bannerTitlePaint)
-        } else if (f.roadName != null || f.currentManeuver != null) {
+        } else if (f.layout != DashLayout.MINIMAL_NIGHT && (f.roadName != null || f.currentManeuver != null)) {
             tmpRect.set(24f, 14f, w - 24f, 74f)
             canvas.drawRoundRect(tmpRect, 12f, 12f, bannerPaint)
             f.roadName?.let { canvas.drawText(ellipsize(it, 34), 38f, 36f, bannerDetailPaint) }
             f.currentManeuver?.let { canvas.drawText(ellipsize(it, 30), 38f, 59f, bannerTitlePaint) }
-            if (f.nextManeuver != null) {
+            if (f.layout == DashLayout.TURN_FIRST && f.nextManeuver != null) {
                 val label = listOfNotNull(f.nextManeuverDistance, f.nextManeuver).joinToString(" · ")
                 tmpRect.set(34f, 80f, w - 34f, 108f)
                 canvas.drawRoundRect(tmpRect, 10f, 10f, previewPaint)
                 canvas.drawText("Then " + ellipsize(label, 42), 46f, 99f, previewTextPaint)
+            }
+        }
+
+        when (f.layout) {
+            DashLayout.MAP_FIRST -> Unit
+            DashLayout.TURN_FIRST -> {
+                f.currentManeuver?.let { maneuver ->
+                    tmpRect.set(24f, h * 0.56f, w - 24f, h * 0.78f)
+                    canvas.drawRoundRect(tmpRect, 14f, 14f, bannerPaint)
+                    canvas.drawText(ellipsize(maneuver, 28), 38f, h * 0.66f, textPaint)
+                    f.nextManeuverDistance?.let { canvas.drawText(it, 38f, h * 0.73f, subTextPaint) }
+                }
+            }
+            DashLayout.LARGE_SPEED -> {
+                tmpRect.set(w * 0.34f, h * 0.28f, w * 0.66f, h * 0.67f)
+                canvas.drawRoundRect(tmpRect, 22f, 22f, bannerPaint)
+                val speedPaint = Paint(textPaint).apply { textSize = 58f; textAlign = Paint.Align.CENTER }
+                val unitPaint = Paint(bannerDetailPaint).apply { textAlign = Paint.Align.CENTER }
+                canvas.drawText(f.speedKph.toInt().toString(), w / 2f, h * 0.52f, speedPaint)
+                canvas.drawText("km/h", w / 2f, h * 0.60f, unitPaint)
+            }
+            DashLayout.MINIMAL_NIGHT -> {
+                val night = Paint().apply { color = Color.argb(125, 0, 0, 0) }
+                canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), night)
+                f.currentManeuver?.let { canvas.drawText(ellipsize(it, 34), 28f, 38f, bannerTitlePaint) }
             }
         }
 
