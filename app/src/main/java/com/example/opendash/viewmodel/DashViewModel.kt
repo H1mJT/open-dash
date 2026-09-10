@@ -72,8 +72,6 @@ data class DashUiState(
     val mapPanY: Float = 0f,
     val remainingKm: Double? = null,
     val etaMinutes: Int? = null,
-    /** Road the rider is currently travelling on, ready for direct display. */
-    val roadName: String? = null,
     /** The imminent meaningful instruction, including its distance. */
     val currentManeuver: String? = null,
     /** The following meaningful instruction, for the two-step preview. */
@@ -756,7 +754,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             offlineStatus = OfflineStatus.ONLINE,
             destLatLng = if (lat != null && lng != null) lat to lng else null,
             routePoints = emptyList(),
-            roadName = null,
             currentManeuver = null,
             nextManeuver = null,
             nextManeuverDistance = null,
@@ -797,7 +794,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             routePoints = emptyList(),
             remainingKm = null,
             etaMinutes = null,
-            roadName = null,
             currentManeuver = null,
             nextManeuver = null,
             nextManeuverDistance = null,
@@ -1038,7 +1034,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
                 remainingKm = remainingM?.let { it / 1000.0 },
                 etaMinutes = etaSec?.let { (it / 60.0).toInt() },
-                roadName = if (!rerouting) guidance?.roadName ?: current.roadName else current.roadName,
                 currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.currentManeuver else current.currentManeuver,
                 // Only retain preview data during an active reroute. A normal exhausted
                 // preview must disappear instead of duplicating the prior instruction.
@@ -1211,8 +1206,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             destLat = destLat,
             destLng = destLng,
             destName = _ui.value.destinationName,
-            route = route?.geometry ?: emptyList(),
-            roadName = _ui.value.roadName,
+            route = route?.let { remainingRouteGeometry(it, progressM, frameRiderLat, frameRiderLng) }.orEmpty(),
             currentManeuver = _ui.value.currentManeuver,
             nextManeuver = _ui.value.nextManeuver,
             nextManeuverDistance = _ui.value.nextManeuverDistance,
@@ -1296,7 +1290,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val currentManeuver: com.example.opendash.dash.nav.Maneuver?,
         val nextManeuver: com.example.opendash.dash.nav.Maneuver?,
         val nextManeuverDistanceM: Double?,
-        val roadName: String?,
     )
 
     private data class Match(val cum: Double, val dist: Double, val bearing: Float, val proj: GeoPoint)
@@ -1334,9 +1327,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val nextMan = currentMan?.let { current -> meaningful.firstOrNull { it.cumulativeMeters > current.cumulativeMeters + 1.0 } }
         val nextTurn = currentMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) } ?: remaining
         val nextDistance = nextMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) }
-        val road = r.maneuvers.lastOrNull { it.cumulativeMeters <= progressM + 1.0 }
-            ?.displayRoadName ?: currentMan?.displayRoadName
-        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, currentMan, nextMan, nextDistance, road)
+        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, currentMan, nextMan, nextDistance)
     }
 
     /** Route segment from the current rider position through the destination. */

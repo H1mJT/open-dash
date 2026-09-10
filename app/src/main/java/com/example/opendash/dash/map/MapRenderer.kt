@@ -16,7 +16,7 @@ import com.example.opendash.dash.DashLayout
  * Draws the navigation frame for the Tripper Dash (526 × 300).
  *
  * Layers: OSM tiles (already dark-filtered by TileProvider) → road route polyline
- * → destination pin → rider marker → top banner (name + remaining) → maneuver chip.
+ * → destination pin → rider marker → ETA and maneuver overlays.
  * Optional heading-up rotation. Paint/Path/Rect objects are reused across frames
  * to avoid per-frame allocation churn.
  */
@@ -35,8 +35,8 @@ class MapRenderer(private val tiles: TileProvider) {
         val destLat: Double? = null,
         val destLng: Double? = null,
         val destName: String? = null,
+        /** Only the untravelled route, beginning at the rider's current position. */
         val route: List<GeoPoint> = emptyList(),
-        val roadName: String? = null,
         val currentManeuver: String? = null,
         val nextManeuver: String? = null,
         val nextManeuverDistance: String? = null,
@@ -130,7 +130,9 @@ class MapRenderer(private val tiles: TileProvider) {
                 // toward the top, so the road ahead recedes into the distance (the
                 // Google-Maps 3D look). Near things (rider, bottom) stay ~undistorted;
                 // far things (dest, route ahead) shrink, which is exactly right.
-                val inset = w * 0.18f
+                // A pronounced trapezoid is intentional. The old 18% inset was too
+                // subtle on the low-resolution dash encoder output to read as a tilt.
+                val inset = w * 0.30f
                 tiltSrc[0] = 0f;          tiltSrc[1] = 0f
                 tiltSrc[2] = w.toFloat(); tiltSrc[3] = 0f
                 tiltSrc[4] = w.toFloat(); tiltSrc[5] = h.toFloat()
@@ -211,21 +213,11 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate) canvas.restore()
 
-        // ── Guidance hierarchy (screen space: imminent turn, then next turn) ──
+        // ── Guidance overlays (screen space) ──
         if (f.rerouting) {
             tmpRect.set(24f, 14f, w - 24f, 58f)
             canvas.drawRoundRect(tmpRect, 12f, 12f, reroutePaint)
             canvas.drawText("Off route — recalculating", 38f, 42f, bannerTitlePaint)
-        } else if (f.layout != DashLayout.MINIMAL_NIGHT && f.currentManeuver != null) {
-            tmpRect.set(24f, 14f, w - 24f, 58f)
-            canvas.drawRoundRect(tmpRect, 12f, 12f, bannerPaint)
-            f.currentManeuver?.let { canvas.drawText(ellipsize(it, 30), 38f, 42f, bannerTitlePaint) }
-            if (f.layout == DashLayout.TURN_FIRST && f.nextManeuver != null) {
-                val label = listOfNotNull(f.nextManeuverDistance, f.nextManeuver).joinToString(" · ")
-                tmpRect.set(34f, 80f, w - 34f, 108f)
-                canvas.drawRoundRect(tmpRect, 10f, 10f, previewPaint)
-                canvas.drawText("Then " + ellipsize(label, 42), 46f, 99f, previewTextPaint)
-            }
         }
 
         when (f.layout) {
