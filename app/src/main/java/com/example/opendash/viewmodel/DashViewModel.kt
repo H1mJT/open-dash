@@ -115,6 +115,8 @@ data class DashUiState(
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
     /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
     val turnSymbolTestCode: Int? = null,
+    /** True while the calibration assistant advances through raw symbol bytes. */
+    val turnSymbolAutoCalibration: Boolean = false,
     /** Result chosen by the rider for each tested native navigation glyph. */
     val turnSymbolMappings: Map<Int, ManeuverType> = emptyMap(),
 )
@@ -223,16 +225,33 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(turnSymbolTestCode = glyph, errorMessage = null) }
     }
 
+    /**
+     * Starts the assisted glyph calibration at [startCode]. Each result selected by the rider
+     * immediately sends the following byte, so no slider adjustment is needed between tests.
+     */
+    fun startTurnSymbolAutoCalibration(startCode: Int) {
+        if (session.state.value != DashState.STREAMING) {
+            _ui.update { it.copy(errorMessage = "Connect and start streaming before calibrating turn symbols.") }
+            return
+        }
+        _ui.update { it.copy(turnSymbolAutoCalibration = true, errorMessage = null) }
+        sendTurnSymbolTest(startCode)
+    }
+
     fun stopTurnSymbolTest() {
-        _ui.update { it.copy(turnSymbolTestCode = null) }
+        _ui.update { it.copy(turnSymbolTestCode = null, turnSymbolAutoCalibration = false) }
         session.clearNavInfo(hasLiveRoute = route != null)
     }
 
     /** Saves the rider's result for a calibration glyph; null means the glyph displayed nothing. */
     fun setTurnSymbolMapping(code: Int, maneuver: ManeuverType?) {
         dashConfig.setManeuverGlyph(code, maneuver)
-        _ui.update {
-            it.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        val advanceAutomatically = _ui.value.turnSymbolAutoCalibration && _ui.value.turnSymbolTestCode == code
+        _ui.update { state ->
+            state.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        }
+        if (advanceAutomatically) {
+            if (code < 0xFF) sendTurnSymbolTest(code + 1) else stopTurnSymbolTest()
         }
     }
 
