@@ -85,7 +85,10 @@ fun OpenDashMap(
 ) {
     val provider by MapProviderSettings.provider.collectAsState()
     val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
-    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey) {
+    // Google Maps Embed does not expose route-progress, heading, or camera-tilt APIs.
+    // Keep it for static browsing, but use the same controllable MapLibre navigation
+    // camera as the dash whenever guidance is active.
+    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey && !navMode) {
         GoogleMapsEmbed(
             riderLat = riderLat,
             riderLng = riderLng,
