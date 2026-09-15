@@ -221,8 +221,6 @@ private fun MapLibreOpenDashMap(
                     .withTextHaloWidth(1.5f)
                     .withTextAnchor("top")
                     .withTextOffset(arrayOf(0f, 1.25f))
-                    .withTextAllowOverlap(false)
-                    .withTextIgnorePlacement(false)
             )
         }
         dest?.let { sm.create(SymbolOptions().withLatLng(LatLng(it.first, it.second)).withIconImage(DEST_ICON).withIconSize(1.1f)) }
