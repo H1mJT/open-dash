@@ -43,7 +43,7 @@ class MapRenderer(private val tiles: TileProvider) {
         /** Active request, not merely a detected off-route position. */
         val rerouting: Boolean = false,
         val remainingText: String? = null, // e.g. "186 km"
-        val tilt3d: Boolean = false,       // perspective 3D view (nav heading-up only)
+        val tilt3d: Boolean = false,       // perspective 3D navigation view
         val etaPrimary: String? = null,    // big glance value, e.g. "24 min" (nav only)
         val etaSecondary: String? = null,  // smaller line, e.g. "18 km · 13:32"
         val gpsWeak: Boolean = false,
@@ -108,11 +108,14 @@ class MapRenderer(private val tiles: TileProvider) {
         canvas.drawColor(bgColor)
 
         val rotate = f.headingUp
-        val tilt = rotate && f.tilt3d
+        // Keep perspective independent from map rotation. The phone preview can be in a
+        // tilted navigation view even when north-up is selected; the projected dash frame
+        // must retain that same 3D treatment after streaming starts.
+        val tilt = f.tilt3d
         // Nav view: bias the rider toward the lower third so the road AHEAD fills the
         // screen (like Google Maps navigation). 3D pushes it lower still. North-up
         // view keeps the rider centred.
-        val pivotY = if (rotate) (if (tilt) h * 0.74f else h * 0.66f) else h / 2f
+        val pivotY = if (rotate || tilt) (if (tilt) h * 0.74f else h * 0.66f) else h / 2f
 
         val ts = Mercator.TILE_SIZE
         val cx = Mercator.lngToTileX(f.centerLng, f.zoom) * ts + f.panX
@@ -123,12 +126,12 @@ class MapRenderer(private val tiles: TileProvider) {
         fun sx(lng: Double) = (Mercator.lngToTileX(lng, f.zoom) * ts - left).toFloat()
         fun sy(lat: Double) = (Mercator.latToTileY(lat, f.zoom) * ts - top).toFloat()
 
-        if (rotate) {
+        if (rotate || tilt) {
             canvas.save()
             // Rotate the world first, then apply the perspective in screen space. Reversing
             // these operations rotates the trapezoid itself, making the tilt appear stuck to
             // a former compass direction instead of always receding ahead of the rider.
-            canvas.rotate(-f.heading, w / 2f, pivotY)
+            if (rotate) canvas.rotate(-f.heading, w / 2f, pivotY)
             if (tilt) {
                 // Perspective tilt: warp the flat frame into a trapezoid that converges
                 // toward the top, so the road ahead recedes into the distance (the
@@ -214,7 +217,7 @@ class MapRenderer(private val tiles: TileProvider) {
             }
         }
 
-        if (rotate) canvas.restore()
+        if (rotate || tilt) canvas.restore()
 
         // ── Guidance overlays (screen space) ──
         if (f.rerouting) {

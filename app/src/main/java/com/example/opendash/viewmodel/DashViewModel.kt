@@ -1259,9 +1259,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
             // This is a perspective treatment of raster tiles rather than true 3D terrain,
-            // but it supplies the forward-looking navigation view riders expect. It remains
-            // optional because perspective-warped raster labels are less crisp than vector tiles.
-            tilt3d = _ui.value.navigationTiltEnabled,
+            // but it supplies the forward-looking navigation view riders expect. Apply it to
+            // every active route, including north-up, so the streaming preview matches the
+            // tilted MapLibre navigation preview shown before the dash connects.
+            tilt3d = _ui.value.navigationTiltEnabled && route != null && loc != null,
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
