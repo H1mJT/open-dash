@@ -61,6 +61,8 @@ data class JoystickMappingConflict(
 data class DashUiState(
     val stage: ConnStage = ConnStage.OFFLINE,
     val frameCount: Int = 0,
+    /** Increments after the shared projection bitmap has been redrawn. */
+    val projectionFrameRevision: Long = 0L,
     val lastButton: String? = null,
     val ssid: String = "",            // empty until a dash is discovered/paired (see DashConfig)
     val wifiPassword: String = "12345678",  // RE Tripper factory passphrase; rider-overridable
@@ -72,8 +74,6 @@ data class DashUiState(
     val mapPanY: Float = 0f,
     val remainingKm: Double? = null,
     val etaMinutes: Int? = null,
-    /** Road the rider is currently travelling on, ready for direct display. */
-    val roadName: String? = null,
     /** The imminent meaningful instruction, including its distance. */
     val currentManeuver: String? = null,
     /** The following meaningful instruction, for the two-step preview. */
@@ -117,6 +117,8 @@ data class DashUiState(
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
     /** Raw native-dash maneuver byte temporarily overriding route guidance for calibration. */
     val turnSymbolTestCode: Int? = null,
+    /** True while the calibration assistant advances through raw symbol bytes. */
+    val turnSymbolAutoCalibration: Boolean = false,
     /** Result chosen by the rider for each tested native navigation glyph. */
     val turnSymbolMappings: Map<Int, ManeuverType> = emptyMap(),
 )
@@ -225,16 +227,33 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(turnSymbolTestCode = glyph, errorMessage = null) }
     }
 
+    /**
+     * Starts the assisted glyph calibration at [startCode]. Each result selected by the rider
+     * immediately sends the following byte, so no slider adjustment is needed between tests.
+     */
+    fun startTurnSymbolAutoCalibration(startCode: Int) {
+        if (session.state.value != DashState.STREAMING) {
+            _ui.update { it.copy(errorMessage = "Connect and start streaming before calibrating turn symbols.") }
+            return
+        }
+        _ui.update { it.copy(turnSymbolAutoCalibration = true, errorMessage = null) }
+        sendTurnSymbolTest(startCode)
+    }
+
     fun stopTurnSymbolTest() {
-        _ui.update { it.copy(turnSymbolTestCode = null) }
+        _ui.update { it.copy(turnSymbolTestCode = null, turnSymbolAutoCalibration = false) }
         session.clearNavInfo(hasLiveRoute = route != null)
     }
 
     /** Saves the rider's result for a calibration glyph; null means the glyph displayed nothing. */
     fun setTurnSymbolMapping(code: Int, maneuver: ManeuverType?) {
         dashConfig.setManeuverGlyph(code, maneuver)
-        _ui.update {
-            it.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        val advanceAutomatically = _ui.value.turnSymbolAutoCalibration && _ui.value.turnSymbolTestCode == code
+        _ui.update { state ->
+            state.copy(turnSymbolMappings = dashConfig.maneuverGlyphCodes.entries.associate { (type, glyph) -> glyph to type })
+        }
+        if (advanceAutomatically) {
+            if (code < 0xFF) sendTurnSymbolTest(code + 1) else stopTurnSymbolTest()
         }
     }
 
@@ -291,7 +310,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var matchedLng: Double? = null
 
     // Frame cache (avoid the expensive redraw when nothing changed)
-    private var frameBitmap: Bitmap? = null
+    @Volatile private var frameBitmap: Bitmap? = null
     private var lastSignature = ""
     private var lastRedrawAt = 0L
     @Volatile private var wallpaperFrameRevision = 0
@@ -487,6 +506,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     fun stopDashPreview() {
         if (!userWantsConnection) location.stop()
     }
+
+    /**
+     * The exact bitmap currently sent to the dash encoder. The dashboard preview displays
+     * this shared frame rather than rendering a second, independently configured map.
+     */
+    fun projectedFrame(): Bitmap? = frameBitmap
 
     fun connect() {
         userWantsConnection = true
@@ -756,7 +781,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             offlineStatus = OfflineStatus.ONLINE,
             destLatLng = if (lat != null && lng != null) lat to lng else null,
             routePoints = emptyList(),
-            roadName = null,
             currentManeuver = null,
             nextManeuver = null,
             nextManeuverDistance = null,
@@ -797,7 +821,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             routePoints = emptyList(),
             remainingKm = null,
             etaMinutes = null,
-            roadName = null,
             currentManeuver = null,
             nextManeuver = null,
             nextManeuverDistance = null,
@@ -868,6 +891,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
         frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
         lastSignature = ""
         // Fresh camera so it snaps to the first fix instead of gliding from a stale spot.
         camInit = false; lastTickNs = 0L; lastFixTime = 0L
@@ -1038,7 +1062,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 routePoints = r?.let { remainingRouteGeometry(it, progressM, matchedLat, matchedLng) }.orEmpty(),
                 remainingKm = remainingM?.let { it / 1000.0 },
                 etaMinutes = etaSec?.let { (it / 60.0).toInt() },
-                roadName = if (!rerouting) guidance?.roadName ?: current.roadName else current.roadName,
                 currentManeuver = if (!rerouting) guidance?.currentManeuver?.instruction ?: current.currentManeuver else current.currentManeuver,
                 // Only retain preview data during an active reroute. A normal exhausted
                 // preview must disappear instead of duplicating the prior instruction.
@@ -1183,6 +1206,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value.wallpaperFit,
             )
             drawCallOverlay(canvas, bmp.width, bmp.height)
+            _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
             return
         }
         // Glanceable ETA — minutes remaining + a stable 12-hour arrival clock. Both come
@@ -1211,8 +1235,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             destLat = destLat,
             destLng = destLng,
             destName = _ui.value.destinationName,
-            route = route?.geometry ?: emptyList(),
-            roadName = _ui.value.roadName,
+            route = route?.let { remainingRouteGeometry(it, progressM, frameRiderLat, frameRiderLng) }.orEmpty(),
             currentManeuver = _ui.value.currentManeuver,
             nextManeuver = _ui.value.nextManeuver,
             nextManeuverDistance = _ui.value.nextManeuverDistance,
@@ -1232,6 +1255,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
     private val callOverlayBackground by lazy {
@@ -1296,7 +1320,6 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val currentManeuver: com.example.opendash.dash.nav.Maneuver?,
         val nextManeuver: com.example.opendash.dash.nav.Maneuver?,
         val nextManeuverDistanceM: Double?,
-        val roadName: String?,
     )
 
     private data class Match(val cum: Double, val dist: Double, val bearing: Float, val proj: GeoPoint)
@@ -1334,9 +1357,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val nextMan = currentMan?.let { current -> meaningful.firstOrNull { it.cumulativeMeters > current.cumulativeMeters + 1.0 } }
         val nextTurn = currentMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) } ?: remaining
         val nextDistance = nextMan?.let { (it.cumulativeMeters - progressM).coerceAtLeast(0.0) }
-        val road = r.maneuvers.lastOrNull { it.cumulativeMeters <= progressM + 1.0 }
-            ?.displayRoadName ?: currentMan?.displayRoadName
-        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, currentMan, nextMan, nextDistance, road)
+        return NavState(remaining, nextTurn, m.bearing, m.dist > 70.0, m.proj, m.dist, currentMan, nextMan, nextDistance)
     }
 
     /** Route segment from the current rider position through the destination. */
@@ -1391,6 +1412,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder?.release(); encoder = null
         idleRenderer.release()
         frameBitmap?.recycle(); frameBitmap = null
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
     private fun startMediaForwarding() {

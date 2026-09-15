@@ -357,6 +357,13 @@ fun SettingsScreen(
                 control = { Text("Send", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
                 onClick = { dashViewModel.sendTurnSymbolTest(turnSymbolCode) },
             )
+            SettingRow(
+                OpenDashIcons.Dash,
+                if (dashUi.turnSymbolAutoCalibration) "Automatic calibration running" else "Auto-calibrate from 0x%02X".format(turnSymbolCode),
+                if (dashUi.turnSymbolAutoCalibration) "Choose what the shown symbol means to send the next number." else "Send each number in order and label the symbol shown on the dash.",
+                control = { Text(if (dashUi.turnSymbolAutoCalibration) "Active" else "Start", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+                onClick = if (dashUi.turnSymbolAutoCalibration) null else { { dashViewModel.startTurnSymbolAutoCalibration(turnSymbolCode) } },
+            )
             dashUi.turnSymbolTestCode?.let { activeCode ->
                 val mappedManeuver = dashUi.turnSymbolMappings[activeCode]
                 SettingRow(
@@ -391,8 +398,8 @@ fun SettingsScreen(
                 }
                 SettingRow(
                     OpenDashIcons.Dash,
-                    "Stop testing",
-                    "Return to live route symbols.",
+                    if (dashUi.turnSymbolAutoCalibration) "Stop automatic calibration" else "Stop testing",
+                    if (dashUi.turnSymbolAutoCalibration) "Stop here and return to live route symbols." else "Return to live route symbols.",
                     control = { Text("Stop", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
                     onClick = { dashViewModel.stopTurnSymbolTest() },
                 )
