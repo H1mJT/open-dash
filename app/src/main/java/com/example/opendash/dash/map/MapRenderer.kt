@@ -125,6 +125,10 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate) {
             canvas.save()
+            // Rotate the world first, then apply the perspective in screen space. Reversing
+            // these operations rotates the trapezoid itself, making the tilt appear stuck to
+            // a former compass direction instead of always receding ahead of the rider.
+            canvas.rotate(-f.heading, w / 2f, pivotY)
             if (tilt) {
                 // Perspective tilt: warp the flat frame into a trapezoid that converges
                 // toward the top, so the road ahead recedes into the distance (the
@@ -144,7 +148,6 @@ class MapRenderer(private val tiles: TileProvider) {
                 tiltMatrix.setPolyToPoly(tiltSrc, 0, tiltDst, 0, 4)
                 canvas.concat(tiltMatrix)
             }
-            canvas.rotate(-f.heading, w / 2f, pivotY)
         }
 
         // ── Tiles (padded when rotating so corners are covered) ──
