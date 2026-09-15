@@ -370,6 +370,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             wifiManager.state.collect { ws ->
                 when (ws.status) {
                     WifiConnStatus.CONNECTED -> {
+                        _ui.update { it.copy(errorMessage = null) }
                         refreshStage()
                         if (userWantsConnection &&
                             session.state.value in listOf(DashState.IDLE, DashState.ERROR)
@@ -383,6 +384,22 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                                 connectSessionWhenSsidResolved()
                             }
                         }
+                    }
+                    WifiConnStatus.REQUESTING -> {
+                        // A running session is bound to the Network instance that just went
+                        // away. Reset it now so the CONNECTED branch can perform a complete
+                        // fresh authentication and restart the projection when the dash has
+                        // finished booting and its hotspot returns. Keep route/nav state intact.
+                        if (userWantsConnection && session.state.value != DashState.IDLE) {
+                            DebugLog.i("DashViewModel") { "Dash WiFi unavailable — preparing session for reconnect" }
+                            teardown()
+                            session.disconnect()
+                            // disconnect() deliberately clears the native navigation state for
+                            // a user-requested stop. Restore its destination immediately so the
+                            // fresh session re-enters navigation rather than idle projection.
+                            session.updateRouteCard(_ui.value.destinationName ?: "OpenDash")
+                        }
+                        refreshStage()
                     }
                     WifiConnStatus.ERROR -> { _ui.value = _ui.value.copy(errorMessage = ws.error); refreshStage() }
                     else -> refreshStage()
