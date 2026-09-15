@@ -61,6 +61,8 @@ data class JoystickMappingConflict(
 data class DashUiState(
     val stage: ConnStage = ConnStage.OFFLINE,
     val frameCount: Int = 0,
+    /** Increments after the shared projection bitmap has been redrawn. */
+    val projectionFrameRevision: Long = 0L,
     val lastButton: String? = null,
     val ssid: String = "",            // empty until a dash is discovered/paired (see DashConfig)
     val wifiPassword: String = "12345678",  // RE Tripper factory passphrase; rider-overridable
@@ -308,7 +310,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var matchedLng: Double? = null
 
     // Frame cache (avoid the expensive redraw when nothing changed)
-    private var frameBitmap: Bitmap? = null
+    @Volatile private var frameBitmap: Bitmap? = null
     private var lastSignature = ""
     private var lastRedrawAt = 0L
     @Volatile private var wallpaperFrameRevision = 0
@@ -504,6 +506,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     fun stopDashPreview() {
         if (!userWantsConnection) location.stop()
     }
+
+    /**
+     * The exact bitmap currently sent to the dash encoder. The dashboard preview displays
+     * this shared frame rather than rendering a second, independently configured map.
+     */
+    fun projectedFrame(): Bitmap? = frameBitmap
 
     fun connect() {
         userWantsConnection = true
@@ -883,6 +891,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
         frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
         lastSignature = ""
         // Fresh camera so it snaps to the first fix instead of gliding from a stale spot.
         camInit = false; lastTickNs = 0L; lastFixTime = 0L
@@ -1197,6 +1206,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value.wallpaperFit,
             )
             drawCallOverlay(canvas, bmp.width, bmp.height)
+            _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
             return
         }
         // Glanceable ETA — minutes remaining + a stable 12-hour arrival clock. Both come
@@ -1245,6 +1255,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
     private val callOverlayBackground by lazy {
@@ -1401,6 +1412,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder?.release(); encoder = null
         idleRenderer.release()
         frameBitmap?.recycle(); frameBitmap = null
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
     private fun startMediaForwarding() {

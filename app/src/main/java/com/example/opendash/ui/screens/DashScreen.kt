@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -22,6 +23,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -273,7 +276,7 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
             }
         }
 
-        // Circular viewport with streaming aura
+        // Dashboard preview with streaming aura.
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -286,29 +289,45 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                         .background(Brush.radialGradient(listOf(GoldGlow, Color.Transparent), radius = 200f))
                 )
             }
-            // Real Google Maps, clipped to the round Tripper shape.
-            Box(
-                modifier = Modifier
-                    .size(272.dp)
-                    .clip(CircleShape)
-                    .border(6.dp, Color(0xFF0D0F10), CircleShape)
-                    .border(2.dp, Line2, CircleShape),
-            ) {
-                OpenDashMap(
-                    riderLat = ui.riderLat,
-                    riderLng = ui.riderLng,
-                    dest = ui.destLatLng,
-                    routePoints = ui.routePoints,
-                    hasLocationPermission = hasEssentialPermissions(),
-                    navMode = ui.hasRoute && ui.followMode,
-                    riderBearing = ui.riderBearing,
-                    riderSpeedKph = ui.riderSpeedKph,
-                    navigationTiltEnabled = ui.navigationTiltEnabled,
-                    dashZoom = ui.mapZoom,
-                    dashPanX = ui.mapPanX,
-                    dashPanY = ui.mapPanY,
-                    modifier = Modifier.fillMaxSize(),
+            // Once streaming, preview the exact 526×300 bitmap passed to the encoder. This
+            // keeps the phone and physical dash visually identical and avoids a second map
+            // render with a different provider/camera implementation.
+            val projectionFrame = if (streaming) vm.projectedFrame() else null
+            if (projectionFrame != null) {
+                Image(
+                    bitmap = projectionFrame.asImageBitmap(),
+                    contentDescription = "Live dash projection preview",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(526f / 300f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .border(2.dp, Line2, RoundedCornerShape(18.dp)),
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(272.dp)
+                        .clip(CircleShape)
+                        .border(6.dp, Color(0xFF0D0F10), CircleShape)
+                        .border(2.dp, Line2, CircleShape),
+                ) {
+                    OpenDashMap(
+                        riderLat = ui.riderLat,
+                        riderLng = ui.riderLng,
+                        dest = ui.destLatLng,
+                        routePoints = ui.routePoints,
+                        hasLocationPermission = hasEssentialPermissions(),
+                        navMode = ui.hasRoute && ui.followMode,
+                        riderBearing = ui.riderBearing,
+                        riderSpeedKph = ui.riderSpeedKph,
+                        navigationTiltEnabled = ui.navigationTiltEnabled,
+                        dashZoom = ui.mapZoom,
+                        dashPanX = ui.mapPanX,
+                        dashPanY = ui.mapPanY,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
