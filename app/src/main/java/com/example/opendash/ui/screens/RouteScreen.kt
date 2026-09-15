@@ -79,6 +79,7 @@ fun RouteScreen(
                 riderLng = null,
                 dest = dest?.let { d -> if (d.lat != null && d.lng != null) d.lat to d.lng else null },
                 routePoints = routeState.route?.geometry.orEmpty(),
+                maneuvers = routeState.route?.maneuvers.orEmpty(),
                 hasLocationPermission = true,
                 fitRoute = true,
                 modifier = Modifier.fillMaxSize(),
@@ -335,4 +336,3 @@ private fun EditLocationDialog(loc: com.example.opendash.data.SavedLocation, onS
         containerColor = Surf1,
     )
 }
-
