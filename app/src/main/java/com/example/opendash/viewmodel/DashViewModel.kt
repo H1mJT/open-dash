@@ -1239,13 +1239,18 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val etaSecondary = if (etaPrimary != null && !arriving)
             java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(etaArrivalMs))
         else null
+        // Match MapLibre's navigation camera: its 3D view always has both pitch and a
+        // travel-direction bearing. The bitmap renderer previously kept a rider-selected
+        // north-up bearing while tilted, which made the streamed map read as flat beside the
+        // pre-connection MapLibre preview. An active 3D route therefore owns its bearing.
+        val useNavigation3d = _ui.value.navigationTiltEnabled && route != null && loc != null
         val frame = MapRenderer.Frame(
             centerLat = centerLat,
             centerLng = centerLng,
             zoom = zoom,
             panX = panX,
             panY = panY,
-            headingUp = headingUp && (loc != null),
+            headingUp = (headingUp || useNavigation3d) && (loc != null),
             heading = heading,
             riderLat = frameRiderLat,
             riderLng = frameRiderLng,
@@ -1259,10 +1264,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
             // This is a perspective treatment of raster tiles rather than true 3D terrain,
-            // but it supplies the forward-looking navigation view riders expect. Apply it to
-            // every active route, including north-up, so the streaming preview matches the
-            // tilted MapLibre navigation preview shown before the dash connects.
-            tilt3d = _ui.value.navigationTiltEnabled && route != null && loc != null,
+            // but it supplies the forward-looking navigation view riders expect. Keep pitch
+            // and travel-direction bearing together to mirror MapLibre's 3D camera.
+            tilt3d = useNavigation3d,
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
