@@ -370,6 +370,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             wifiManager.state.collect { ws ->
                 when (ws.status) {
                     WifiConnStatus.CONNECTED -> {
+                        _ui.update { it.copy(errorMessage = null) }
                         refreshStage()
                         if (userWantsConnection &&
                             session.state.value in listOf(DashState.IDLE, DashState.ERROR)
@@ -383,6 +384,22 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                                 connectSessionWhenSsidResolved()
                             }
                         }
+                    }
+                    WifiConnStatus.REQUESTING -> {
+                        // A running session is bound to the Network instance that just went
+                        // away. Reset it now so the CONNECTED branch can perform a complete
+                        // fresh authentication and restart the projection when the dash has
+                        // finished booting and its hotspot returns. Keep route/nav state intact.
+                        if (userWantsConnection && session.state.value != DashState.IDLE) {
+                            DebugLog.i("DashViewModel") { "Dash WiFi unavailable — preparing session for reconnect" }
+                            teardown()
+                            session.disconnect()
+                            // disconnect() deliberately clears the native navigation state for
+                            // a user-requested stop. Restore its destination immediately so the
+                            // fresh session re-enters navigation rather than idle projection.
+                            session.updateRouteCard(_ui.value.destinationName ?: "OpenDash")
+                        }
+                        refreshStage()
                     }
                     WifiConnStatus.ERROR -> { _ui.value = _ui.value.copy(errorMessage = ws.error); refreshStage() }
                     else -> refreshStage()
@@ -1222,13 +1239,18 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val etaSecondary = if (etaPrimary != null && !arriving)
             java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(etaArrivalMs))
         else null
+        // Match MapLibre's navigation camera: its 3D view always has both pitch and a
+        // travel-direction bearing. The bitmap renderer previously kept a rider-selected
+        // north-up bearing while tilted, which made the streamed map read as flat beside the
+        // pre-connection MapLibre preview. An active 3D route therefore owns its bearing.
+        val useNavigation3d = _ui.value.navigationTiltEnabled && route != null && loc != null
         val frame = MapRenderer.Frame(
             centerLat = centerLat,
             centerLng = centerLng,
             zoom = zoom,
             panX = panX,
             panY = panY,
-            headingUp = headingUp && (loc != null),
+            headingUp = (headingUp || useNavigation3d) && (loc != null),
             heading = heading,
             riderLat = frameRiderLat,
             riderLng = frameRiderLng,
@@ -1242,9 +1264,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             rerouting = _ui.value.rerouting,
             remainingText = remainingM?.let { fmtDist(it) },
             // This is a perspective treatment of raster tiles rather than true 3D terrain,
-            // but it supplies the forward-looking navigation view riders expect. It remains
-            // optional because perspective-warped raster labels are less crisp than vector tiles.
-            tilt3d = _ui.value.navigationTiltEnabled,
+            // but it supplies the forward-looking navigation view riders expect. Keep pitch
+            // and travel-direction bearing together to mirror MapLibre's 3D camera.
+            tilt3d = useNavigation3d,
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,

@@ -210,8 +210,10 @@ class DashWifiManager(
                     ssid   = pendingSsid,
                     error  = "Could not connect to '$pendingSsid' — network not found or wrong password",
                 )
-                // Don't auto-retry onUnavailable; user must try again
-                wantConnected = false
+                // A dash reboot can take longer than Android's request timeout. Preserve the
+                // rider's explicit connect intent and keep retrying so navigation resumes when
+                // its hotspot comes back, rather than requiring a new tap in the app.
+                if (wantConnected) scheduleReconnect()
             }
 
             override fun onLost(network: Network) {

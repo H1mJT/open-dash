@@ -29,6 +29,8 @@ import com.example.opendash.data.MapProviderSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.opendash.dash.nav.GeoPoint
+import com.example.opendash.dash.nav.Maneuver
+import com.example.opendash.dash.nav.ManeuverType
 import com.example.opendash.dash.map.Mercator
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -56,6 +58,7 @@ private const val NAV_LOOK_AHEAD_METERS = 115.0
 private const val MOVEMENT_HEADING_THRESHOLD_KPH = 10f
 private const val RIDER_ICON = "rider-chevron"
 private const val DEST_ICON = "dest-pin"
+private const val MANEUVER_ICON_PREFIX = "maneuver-"
 
 /**
  * In-app phone map. Riders can select keyless MapLibre/OpenFreeMap or Google Maps Embed
@@ -70,6 +73,8 @@ fun OpenDashMap(
     riderLng: Double?,
     dest: Pair<Double, Double>?,
     routePoints: List<GeoPoint>,
+    /** Turn markers shown on the route preview to disambiguate parallel roads and ramps. */
+    maneuvers: List<Maneuver> = emptyList(),
     hasLocationPermission: Boolean,
     modifier: Modifier = Modifier,
     fitRoute: Boolean = false,
@@ -97,7 +102,7 @@ fun OpenDashMap(
         )
     } else {
         MapLibreOpenDashMap(
-            riderLat, riderLng, dest, routePoints, hasLocationPermission, fitRoute, navMode,
+            riderLat, riderLng, dest, routePoints, maneuvers, hasLocationPermission, fitRoute, navMode,
             riderBearing, riderSpeedKph, navigationTiltEnabled, dashZoom, dashPanX, dashPanY, modifier,
         )
     }
@@ -109,6 +114,7 @@ private fun MapLibreOpenDashMap(
     riderLng: Double?,
     dest: Pair<Double, Double>?,
     routePoints: List<GeoPoint>,
+    maneuvers: List<Maneuver>,
     hasLocationPermission: Boolean,
     fitRoute: Boolean,
     navMode: Boolean,
@@ -173,6 +179,9 @@ private fun MapLibreOpenDashMap(
                 if (destroyed) return@setStyle
                 style.addImage(RIDER_ICON, chevronBitmap())
                 style.addImage(DEST_ICON, destPinBitmap())
+                ManeuverType.entries.forEach { type ->
+                    style.addImage("$MANEUVER_ICON_PREFIX${type.name.lowercase()}", maneuverBitmap(type))
+                }
                 lineMgr = LineManager(mapView, m, style)
                 symbolMgr = SymbolManager(mapView, m, style).apply {
                     iconAllowOverlap = true; iconIgnorePlacement = true
@@ -185,7 +194,7 @@ private fun MapLibreOpenDashMap(
     // Redraw route + markers whenever navigation progress or mode changes. The view model
     // supplies only the untravelled route while guiding, so the blue line starts at the rider
     // and naturally disappears behind them.
-    LaunchedEffect(styleReady, routePoints, dest, riderLat, riderLng, cameraBearing, navMode) {
+    LaunchedEffect(styleReady, routePoints, maneuvers, dest, riderLat, riderLng, cameraBearing, navMode) {
         if (destroyed) return@LaunchedEffect
         val lm = lineMgr ?: return@LaunchedEffect
         val sm = symbolMgr ?: return@LaunchedEffect
@@ -194,6 +203,24 @@ private fun MapLibreOpenDashMap(
             lm.create(
                 LineOptions().withLatLngs(routePoints.map { LatLng(it.lat, it.lng) })
                     .withLineColor("#4285F4").withLineWidth(5.5f)
+            )
+        }
+        // OSRM supplies a maneuver location and rider-facing instruction for every route step.
+        // Put both on the MapLibre route instead of relying on road geometry alone: this makes
+        // forks, slip roads, and flyovers legible before the rider reaches the junction.
+        maneuvers.filter { it.isMeaningful }.forEach { maneuver ->
+            sm.create(
+                SymbolOptions()
+                    .withLatLng(LatLng(maneuver.location.lat, maneuver.location.lng))
+                    .withIconImage("$MANEUVER_ICON_PREFIX${maneuver.type.name.lowercase()}")
+                    .withIconSize(0.72f)
+                    .withTextField(maneuver.instruction)
+                    .withTextSize(12f)
+                    .withTextColor("#1A1A1A")
+                    .withTextHaloColor("#FFFFFFFF")
+                    .withTextHaloWidth(1.5f)
+                    .withTextAnchor("top")
+                    .withTextOffset(arrayOf(0f, 1.25f))
             )
         }
         dest?.let { sm.create(SymbolOptions().withLatLng(LatLng(it.first, it.second)).withIconImage(DEST_ICON).withIconSize(1.1f)) }
@@ -354,6 +381,64 @@ private fun destPinBitmap(): Bitmap {
     p.color = android.graphics.Color.WHITE; c.drawCircle(s / 2f, s / 2f, s * 0.30f, p)
     p.color = android.graphics.Color.rgb(234, 67, 53); c.drawCircle(s / 2f, s / 2f, s * 0.24f, p)
     p.color = android.graphics.Color.WHITE; c.drawCircle(s / 2f, s / 2f, s * 0.09f, p)
+    return bmp
+}
+
+/** White-on-blue turn glyph used with a maneuver's OSRM instruction label. */
+private fun maneuverBitmap(type: ManeuverType): Bitmap {
+    val s = 76
+    val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.FILL
+    }
+    canvas.drawCircle(s / 2f, s / 2f, s * 0.39f, paint)
+    paint.color = android.graphics.Color.rgb(66, 133, 244)
+    canvas.drawCircle(s / 2f, s / 2f, s * 0.35f, paint)
+    paint.color = android.graphics.Color.WHITE
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = s * 0.115f
+    paint.strokeCap = Paint.Cap.SQUARE
+    paint.strokeJoin = Paint.Join.MITER
+    val path = Path().apply {
+        moveTo(s * 0.50f, s * 0.76f)
+        when (type) {
+            ManeuverType.TURN_LEFT, ManeuverType.SLIGHT_LEFT, ManeuverType.SHARP_LEFT -> {
+                val x = when (type) {
+                    ManeuverType.SLIGHT_LEFT -> s * 0.27f
+                    ManeuverType.SHARP_LEFT -> s * 0.18f
+                    else -> s * 0.20f
+                }
+                lineTo(s * 0.50f, s * 0.48f); lineTo(x, s * 0.48f)
+                moveTo(x + s * 0.10f, s * 0.36f); lineTo(x, s * 0.48f); lineTo(x + s * 0.10f, s * 0.60f)
+            }
+            ManeuverType.TURN_RIGHT, ManeuverType.SLIGHT_RIGHT, ManeuverType.SHARP_RIGHT -> {
+                val x = when (type) {
+                    ManeuverType.SLIGHT_RIGHT -> s * 0.73f
+                    ManeuverType.SHARP_RIGHT -> s * 0.82f
+                    else -> s * 0.80f
+                }
+                lineTo(s * 0.50f, s * 0.48f); lineTo(x, s * 0.48f)
+                moveTo(x - s * 0.10f, s * 0.36f); lineTo(x, s * 0.48f); lineTo(x - s * 0.10f, s * 0.60f)
+            }
+            ManeuverType.UTURN -> {
+                lineTo(s * 0.50f, s * 0.30f); lineTo(s * 0.27f, s * 0.30f); lineTo(s * 0.27f, s * 0.54f)
+                moveTo(s * 0.16f, s * 0.43f); lineTo(s * 0.27f, s * 0.54f); lineTo(s * 0.38f, s * 0.43f)
+            }
+            ManeuverType.ROUNDABOUT -> {
+                paint.style = Paint.Style.FILL
+                canvas.drawCircle(s * 0.50f, s * 0.48f, s * 0.16f, paint)
+                moveTo(s * 0.50f, s * 0.78f); lineTo(s * 0.50f, s * 0.64f)
+                moveTo(s * 0.61f, s * 0.35f); lineTo(s * 0.72f, s * 0.25f)
+            }
+            else -> {
+                lineTo(s * 0.50f, s * 0.25f)
+                moveTo(s * 0.38f, s * 0.37f); lineTo(s * 0.50f, s * 0.25f); lineTo(s * 0.62f, s * 0.37f)
+            }
+        }
+    }
+    canvas.drawPath(path, paint)
     return bmp
 }
 
