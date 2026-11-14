@@ -289,9 +289,6 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                         .background(Brush.radialGradient(listOf(GoldGlow, Color.Transparent), radius = 200f))
                 )
             }
-            // Once streaming, preview the exact 526×300 bitmap passed to the encoder. This
-            // keeps the phone and physical dash visually identical and avoids a second map
-            // render with a different provider/camera implementation.
             // Keep the same live MapLibre view mounted while streaming. Its native
             // snapshot is what the encoder sends to the dash, so the phone preview and
             // streamed frame share the exact vector style and 3D camera.
