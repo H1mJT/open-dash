@@ -16,7 +16,6 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.Style
 import org.maplibre.android.snapshotter.MapSnapshot
 import org.maplibre.android.snapshotter.MapSnapshotter
-import kotlin.math.max
 
 /**
  * Service-owned, off-screen MapLibre vector renderer. It does not depend on a Compose
@@ -82,8 +81,15 @@ internal class MapLibreSnapshotRenderer(
             return
         }
 
+        // Apply the same tile-pixel pan used by the phone MapLibre preview.
+        val targetTileX = Mercator.lngToTileX(frame.centerLng, frame.zoom) + frame.panX / Mercator.TILE_SIZE
+        val targetTileY = Mercator.latToTileY(frame.centerLat, frame.zoom) + frame.panY / Mercator.TILE_SIZE
+        val cameraTarget = LatLng(
+            Mercator.tileYToLat(targetTileY, frame.zoom),
+            Mercator.tileXToLng(targetTileX, frame.zoom),
+        )
         val camera = CameraPosition.Builder()
-            .target(LatLng(frame.centerLat, frame.centerLng))
+            .target(cameraTarget)
             .zoom(frame.zoom.toDouble())
             .bearing(if (frame.headingUp) frame.heading.toDouble() else 0.0)
             .tilt(if (frame.tilt3d) 55.0 else 0.0)
