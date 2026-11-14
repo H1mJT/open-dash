@@ -292,42 +292,39 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
             // Once streaming, preview the exact 526×300 bitmap passed to the encoder. This
             // keeps the phone and physical dash visually identical and avoids a second map
             // render with a different provider/camera implementation.
-            val projectionFrame = if (streaming) vm.projectedFrame() else null
-            if (projectionFrame != null) {
-                Image(
-                    bitmap = projectionFrame.asImageBitmap(),
-                    contentDescription = "Live dash projection preview",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(526f / 300f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .border(2.dp, Line2, RoundedCornerShape(18.dp)),
-                )
+            // Keep the same live MapLibre view mounted while streaming. Its native
+            // snapshot is what the encoder sends to the dash, so the phone preview and
+            // streamed frame share the exact vector style and 3D camera.
+            val mapPreviewModifier = if (streaming) {
+                Modifier.fillMaxWidth().aspectRatio(526f / 300f)
             } else {
-                Box(
-                    modifier = Modifier
-                        .size(272.dp)
-                        .clip(CircleShape)
-                        .border(6.dp, Color(0xFF0D0F10), CircleShape)
-                        .border(2.dp, Line2, CircleShape),
-                ) {
-                    OpenDashMap(
-                        riderLat = ui.riderLat,
-                        riderLng = ui.riderLng,
-                        dest = ui.destLatLng,
-                        routePoints = ui.routePoints,
-                        hasLocationPermission = hasEssentialPermissions(),
-                        navMode = ui.navigationTiltEnabled,
-                        riderBearing = ui.riderBearing,
-                        riderSpeedKph = ui.riderSpeedKph,
-                        navigationTiltEnabled = ui.navigationTiltEnabled,
-                        dashZoom = ui.mapZoom,
-                        dashPanX = ui.mapPanX,
-                        dashPanY = ui.mapPanY,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                Modifier.size(272.dp)
+            }
+            Box(
+                modifier = mapPreviewModifier
+                    .clip(if (streaming) RoundedCornerShape(18.dp) else CircleShape)
+                    .border(
+                        if (streaming) 2.dp else 2.dp,
+                        Line2,
+                        if (streaming) RoundedCornerShape(18.dp) else CircleShape,
+                    ),
+            ) {
+                OpenDashMap(
+                    riderLat = ui.riderLat,
+                    riderLng = ui.riderLng,
+                    dest = ui.destLatLng,
+                    routePoints = ui.routePoints,
+                    hasLocationPermission = hasEssentialPermissions(),
+                    navMode = ui.navigationTiltEnabled,
+                    riderBearing = ui.riderBearing,
+                    riderSpeedKph = ui.riderSpeedKph,
+                    navigationTiltEnabled = ui.navigationTiltEnabled,
+                    dashZoom = ui.mapZoom,
+                    dashPanX = ui.mapPanX,
+                    dashPanY = ui.mapPanY,
+                    onMapSnapshot = if (streaming) vm::acceptMapLibreFrame else null,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
 
