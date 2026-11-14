@@ -1,6 +1,11 @@
 package com.example.opendash.viewmodel
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -156,6 +161,19 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var encoder: DashEncoder? = null
     private var streamJob: Job? = null
     private var mediaObserveJob: Job? = null
+    @Volatile private var dashRendererService: DashKeepAliveService? = null
+    private var dashRendererBound = false
+    private val dashRendererConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as? DashKeepAliveService.LocalBinder)?.service() ?: return
+            dashRendererService = service
+            service.setMapFrameListener(::acceptMapLibreFrame)
+            lastMapFrame?.let(service::submitMapFrame)
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            dashRendererService = null
+        }
+    }
     @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
     @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
@@ -540,6 +558,32 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
      * remains mounted during streaming, so this bitmap contains the same vector style,
      * 3D buildings, route annotations and camera that the rider sees on the phone.
      */
+    private fun bindDashMapRenderer() {
+        if (dashRendererBound) return
+        val context = getApplication<Application>()
+        dashRendererBound = context.bindService(
+            Intent(context, DashKeepAliveService::class.java),
+            dashRendererConnection,
+            Context.BIND_AUTO_CREATE,
+        )
+    }
+
+    private fun unbindDashMapRenderer() {
+        dashRendererService?.let {
+            it.setMapFrameListener(null)
+            it.stopMapRenderer()
+        }
+        dashRendererService = null
+        if (dashRendererBound) {
+            runCatching { getApplication<Application>().unbindService(dashRendererConnection) }
+            dashRendererBound = false
+        }
+    }
+
+    private fun publishServiceMapFrame(frame: MapRenderer.Frame) {
+        dashRendererService?.submitMapFrame(frame)
+    }
+
     fun acceptMapLibreFrame(mapFrame: Bitmap) {
         if (session.state.value != DashState.STREAMING) return
         val target = frameBitmap ?: return
@@ -942,6 +986,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         camInit = false; lastTickNs = 0L; lastFixTime = 0L
 
         session.startStreaming()
+        bindDashMapRenderer()
         startMediaForwarding()
         location.location.value?.let { tiles.prefetch(it.latitude, it.longitude) }
 
@@ -1262,6 +1307,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     layout = _ui.value.dashLayout,
                     speedKph = (loc?.speed ?: 0f) * 3.6f,
                 )
+                publishServiceMapFrame(lastMapFrame!!)
                 return
             }
             val canvas = Canvas(bmp)
@@ -1328,9 +1374,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             speedKph = (loc?.speed ?: 0f) * 3.6f,
         )
         lastMapFrame = frame
-        // The native MapLibre snapshot supplies all map pixels while streaming; keep the
-        // Canvas renderer only for pre-stream fallback and non-map standby screens.
-        if (session.state.value == DashState.STREAMING) return
+        // The foreground service owns the off-screen MapLibre renderer. It keeps
+        // capturing the native vector style even when the Activity/Compose tree stops.
+        if (session.state.value == DashState.STREAMING) {
+            publishServiceMapFrame(frame)
+            return
+        }
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
@@ -1487,6 +1536,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun teardown() {
         streamJob?.cancel(); streamJob = null
+        unbindDashMapRenderer()
         stopMediaForwarding()
         encoder?.release(); encoder = null
         idleRenderer.release()
