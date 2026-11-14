@@ -117,7 +117,7 @@ internal class MapLibreSnapshotRenderer(
                 if (latestFrame !== frame) renderLatest()
             }, { error ->
                 rendering = false
-                onError("MapLibre snapshot failed: ${error.message}")
+                onError("MapLibre snapshot failed: $error")
                 if (latestFrame !== frame) renderLatest()
             })
         }.onFailure {
