@@ -122,12 +122,16 @@ internal class MapLibreSnapshotRenderer(
         runCatching {
             engine.start({ snapshot ->
                 if (released) return@start
-                runCatching { drawAnnotations(snapshot, frame) }
-                    .onFailure { onError("Map annotation render failed: ${it.message}") }
-                onFrame(snapshot.bitmap)
-                rendering = false
-                // If a newer frame arrived during rendering, immediately render that state.
-                if (latestFrame !== frame) renderLatest()
+                try {
+                    runCatching { drawAnnotations(snapshot, frame) }
+                        .onFailure { onError("Map annotation render failed: ${it.message}") }
+                    runCatching { onFrame(snapshot.bitmap) }
+                        .onFailure { onError("Map frame delivery failed: ${it.message}") }
+                } finally {
+                    rendering = false
+                    // If a newer frame arrived during rendering, immediately render that state.
+                    if (!released && latestFrame !== frame) renderLatest()
+                }
             }, { error ->
                 rendering = false
                 onError("MapLibre snapshot failed: $error")
