@@ -1313,6 +1313,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     layout = _ui.value.dashLayout,
                     speedKph = (loc?.speed ?: 0f) * 3.6f,
                     tilt3d = useNavigation3d,
+                    navigationMode = useNavigation3d,
                 )
                 publishServiceMapFrame(lastMapFrame!!)
                 return
@@ -1373,6 +1374,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             // but it supplies the forward-looking navigation view riders expect. Keep pitch
             // and travel-direction bearing together to mirror MapLibre's 3D camera.
             tilt3d = useNavigation3d,
+            navigationMode = loc != null && (route != null || _ui.value.navigationTiltEnabled),
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
