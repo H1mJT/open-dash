@@ -315,6 +315,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var frameBitmap: Bitmap? = null
     private val frameLock = Any()
     private val mapFramePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    @Volatile private var lastMapFrame: MapRenderer.Frame? = null
     private var lastSignature = ""
     private var lastRedrawAt = 0L
     @Volatile private var wallpaperFrameRevision = 0
@@ -551,6 +552,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 Rect(0, 0, target.width, target.height),
                 mapFramePaint,
             )
+            lastMapFrame?.let { mapRenderer.drawOverlays(canvas, it) }
             drawCallOverlay(canvas, target.width, target.height)
         }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
@@ -1240,12 +1242,28 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private fun redrawFrame(
         centerLat: Double, centerLng: Double, heading: Float, remainingM: Double?,
     ) {
-        // During streaming the mounted MapLibre view is the source of truth for map pixels.
-        // Never let the legacy Canvas/raster renderer overwrite its latest native snapshot.
-        if (session.state.value == DashState.STREAMING) return
         val bmp = frameBitmap ?: return
         val loc = location.location.value
         if (route == null && destLat == null && destLng == null) {
+            // Free-roam has no route, but still needs current HUD state layered over the
+            // native MapLibre frame (GPS status / layout / speed).
+            if (session.state.value == DashState.STREAMING) {
+                val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
+                lastMapFrame = MapRenderer.Frame(
+                    centerLat = centerLat,
+                    centerLng = centerLng,
+                    zoom = zoom,
+                    headingUp = (headingUp || useNavigation3d) && (loc != null),
+                    heading = heading,
+                    riderLat = frameRiderLat,
+                    riderLng = frameRiderLng,
+                    gpsWeak = gpsStatus == GpsStatus.WEAK,
+                    gpsLost = gpsStatus == GpsStatus.LOST,
+                    layout = _ui.value.dashLayout,
+                    speedKph = (loc?.speed ?: 0f) * 3.6f,
+                )
+                return
+            }
             val canvas = Canvas(bmp)
             idleRenderer.draw(
                 canvas,
@@ -1309,6 +1327,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             layout = _ui.value.dashLayout,
             speedKph = (loc?.speed ?: 0f) * 3.6f,
         )
+        lastMapFrame = frame
+        // The native MapLibre snapshot supplies all map pixels while streaming; keep the
+        // Canvas renderer only for pre-stream fallback and non-map standby screens.
+        if (session.state.value == DashState.STREAMING) return
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
