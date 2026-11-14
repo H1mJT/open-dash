@@ -111,7 +111,7 @@ data class DashUiState(
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
     val dashLayout: DashLayout = DashLayout.MAP_FIRST,
-    /** Perspective map view, only used while following a route heading-up. */
+    /** Keep the map in its forward-looking perspective camera while location is available. */
     val navigationTiltEnabled: Boolean = true,
     val streamFps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS,
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
