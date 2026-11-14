@@ -289,9 +289,8 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                         .background(Brush.radialGradient(listOf(GoldGlow, Color.Transparent), radius = 200f))
                 )
             }
-            // Keep the same live MapLibre view mounted while streaming. Its native
-            // snapshot is what the encoder sends to the dash, so the phone preview and
-            // streamed frame share the exact vector style and 3D camera.
+            // The phone preview remains interactive; the foreground dash service owns
+            // an independent off-screen MapLibre renderer for the physical display.
             val mapPreviewModifier = if (streaming) {
                 Modifier.fillMaxWidth().aspectRatio(526f / 300f)
             } else {
@@ -319,7 +318,6 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     dashZoom = ui.mapZoom,
                     dashPanX = ui.mapPanX,
                     dashPanY = ui.mapPanY,
-                    onMapSnapshot = if (streaming) vm::acceptMapLibreFrame else null,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
