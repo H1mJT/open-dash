@@ -219,6 +219,13 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate || tilt) canvas.restore()
 
+        drawOverlays(canvas, f)
+    }
+
+    /** Draws dash HUD over an already-rendered map background (including native MapLibre). */
+    fun drawOverlays(canvas: Canvas, f: Frame) {
+        val w = canvas.width
+        val h = canvas.height
         // ── Guidance overlays (screen space) ──
         if (f.rerouting) {
             tmpRect.set(24f, 14f, w - 24f, 58f)
