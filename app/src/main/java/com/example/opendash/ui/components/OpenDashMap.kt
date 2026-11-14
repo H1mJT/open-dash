@@ -64,7 +64,7 @@ private const val MANEUVER_ICON_PREFIX = "maneuver-"
 
 /**
  * In-app phone map. Riders can select keyless MapLibre/OpenFreeMap or Google Maps Embed
- * in Settings; the physical dash still uses the off-screen power-efficient renderer.
+ * in Settings; while streaming, the physical dash receives snapshots of this same MapLibre view.
  *
  * Modes: [fitRoute] frames the whole route; [navMode] tilts/zooms/rotates to heading with a
  * rider chevron; default follows the rider north-up.
