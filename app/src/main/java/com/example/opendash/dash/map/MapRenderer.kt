@@ -44,6 +44,7 @@ class MapRenderer(private val tiles: TileProvider) {
         val rerouting: Boolean = false,
         val remainingText: String? = null, // e.g. "186 km"
         val tilt3d: Boolean = false,       // perspective 3D navigation view
+        val navigationMode: Boolean = false, // forward-looking route/follow camera, independent of pitch
         val etaPrimary: String? = null,    // big glance value, e.g. "24 min" (nav only)
         val etaSecondary: String? = null,  // smaller line, e.g. "18 km · 13:32"
         val gpsWeak: Boolean = false,
