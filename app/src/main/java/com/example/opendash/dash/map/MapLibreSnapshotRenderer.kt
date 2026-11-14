@@ -83,7 +83,7 @@ internal class MapLibreSnapshotRenderer(
 
         // Apply the same tile-pixel pan used by the phone MapLibre preview.
         // Match the in-app navigation camera: look 115 m ahead of the rider in 3D mode.
-        val baseTarget = if (frame.tilt3d && frame.riderLat != null && frame.riderLng != null) {
+        val baseTarget = if (frame.navigationMode && frame.riderLat != null && frame.riderLng != null) {
             pointAhead(frame.centerLat, frame.centerLng, frame.heading.toDouble(), 115.0)
         } else {
             LatLng(frame.centerLat, frame.centerLng)
@@ -98,7 +98,7 @@ internal class MapLibreSnapshotRenderer(
         val camera = CameraPosition.Builder()
             .target(cameraTarget)
             .zoom(cameraZoom)
-            .bearing(if (frame.headingUp) frame.heading.toDouble() else 0.0)
+            .bearing(if (frame.navigationMode || frame.headingUp) frame.heading.toDouble() else 0.0)
             .tilt(if (frame.tilt3d) 55.0 else 0.0)
             .build()
 
