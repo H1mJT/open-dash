@@ -289,45 +289,40 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                         .background(Brush.radialGradient(listOf(GoldGlow, Color.Transparent), radius = 200f))
                 )
             }
-            // Once streaming, preview the exact 526×300 bitmap passed to the encoder. This
-            // keeps the phone and physical dash visually identical and avoids a second map
-            // render with a different provider/camera implementation.
-            val projectionFrame = if (streaming) vm.projectedFrame() else null
-            if (projectionFrame != null) {
-                Image(
-                    bitmap = projectionFrame.asImageBitmap(),
-                    contentDescription = "Live dash projection preview",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(526f / 300f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .border(2.dp, Line2, RoundedCornerShape(18.dp)),
-                )
+            // The phone preview remains interactive; the foreground dash service owns
+            // an independent off-screen MapLibre renderer for the physical display.
+            val mapPreviewModifier = if (streaming) {
+                Modifier.fillMaxWidth().aspectRatio(526f / 300f)
             } else {
-                Box(
-                    modifier = Modifier
-                        .size(272.dp)
-                        .clip(CircleShape)
-                        .border(6.dp, Color(0xFF0D0F10), CircleShape)
-                        .border(2.dp, Line2, CircleShape),
-                ) {
-                    OpenDashMap(
-                        riderLat = ui.riderLat,
-                        riderLng = ui.riderLng,
-                        dest = ui.destLatLng,
-                        routePoints = ui.routePoints,
-                        hasLocationPermission = hasEssentialPermissions(),
-                        navMode = ui.hasRoute && ui.followMode,
-                        riderBearing = ui.riderBearing,
-                        riderSpeedKph = ui.riderSpeedKph,
-                        navigationTiltEnabled = ui.navigationTiltEnabled,
-                        dashZoom = ui.mapZoom,
-                        dashPanX = ui.mapPanX,
-                        dashPanY = ui.mapPanY,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                Modifier.size(272.dp)
+            }
+            Box(
+                modifier = mapPreviewModifier
+                    .clip(if (streaming) RoundedCornerShape(18.dp) else CircleShape)
+                    .border(
+                        if (streaming) 2.dp else 2.dp,
+                        Line2,
+                        if (streaming) RoundedCornerShape(18.dp) else CircleShape,
+                    ),
+            ) {
+                OpenDashMap(
+                    riderLat = ui.riderLat,
+                    riderLng = ui.riderLng,
+                    dest = ui.destLatLng,
+                    routePoints = ui.routePoints,
+                    hasLocationPermission = hasEssentialPermissions(),
+                    // Only force MapLibre navigation mode when a location fix exists;
+                    // otherwise keep the rider's selected idle map provider. A live route
+                    // still uses forward-follow camera when perspective pitch is disabled.
+                    navMode = ui.hasGps && (ui.hasRoute || ui.navigationTiltEnabled),
+                    riderBearing = ui.riderBearing,
+                    riderSpeedKph = ui.riderSpeedKph,
+                    navigationTiltEnabled = ui.navigationTiltEnabled,
+                    dashZoom = ui.mapZoom,
+                    dashPanX = ui.mapPanX,
+                    dashPanY = ui.mapPanY,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
 

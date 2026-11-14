@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
+import android.os.SystemClock
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.graphics.Path
@@ -19,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -62,7 +64,7 @@ private const val MANEUVER_ICON_PREFIX = "maneuver-"
 
 /**
  * In-app phone map. Riders can select keyless MapLibre/OpenFreeMap or Google Maps Embed
- * in Settings; the physical dash still uses the off-screen power-efficient renderer.
+ * in Settings; while streaming, the physical dash receives snapshots of this same MapLibre view.
  *
  * Modes: [fitRoute] frames the whole route; [navMode] tilts/zooms/rotates to heading with a
  * rider chevron; default follows the rider north-up.
@@ -87,13 +89,15 @@ fun OpenDashMap(
     dashZoom: Int? = null,
     dashPanX: Float = 0f,
     dashPanY: Float = 0f,
+    /** Receives rendered MapLibre frames while the dash is streaming. */
+    onMapSnapshot: ((Bitmap) -> Unit)? = null,
 ) {
     val provider by MapProviderSettings.provider.collectAsState()
     val hasGoogleMapsKey by MapProviderSettings.hasGoogleMapsKey.collectAsState()
     // Google Maps Embed does not expose route-progress, heading, or camera-tilt APIs.
     // Keep it for static browsing, but use the same controllable MapLibre navigation
     // camera as the dash whenever guidance is active.
-    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey && !navMode) {
+    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey && !navMode && onMapSnapshot == null) {
         GoogleMapsEmbed(
             riderLat = riderLat,
             riderLng = riderLng,
@@ -103,7 +107,7 @@ fun OpenDashMap(
     } else {
         MapLibreOpenDashMap(
             riderLat, riderLng, dest, routePoints, maneuvers, hasLocationPermission, fitRoute, navMode,
-            riderBearing, riderSpeedKph, navigationTiltEnabled, dashZoom, dashPanX, dashPanY, modifier,
+            riderBearing, riderSpeedKph, navigationTiltEnabled, dashZoom, dashPanX, dashPanY, modifier, onMapSnapshot,
         )
     }
 }
@@ -125,6 +129,7 @@ private fun MapLibreOpenDashMap(
     dashPanX: Float,
     dashPanY: Float,
     modifier: Modifier,
+    onMapSnapshot: ((Bitmap) -> Unit)?,
 ) {
     val context = LocalContext.current
     remember { MapLibre.getInstance(context) }
@@ -275,6 +280,40 @@ private fun MapLibreOpenDashMap(
             dest != null -> runCatching {
                 m.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(dest.first, dest.second), 13.0))
             }
+        }
+    }
+
+    // Capture the very same MapLibre view used by the phone preview. This preserves
+    // the vector style, building extrusions, labels, route and exact navigation camera
+    // instead of attempting to reconstruct the map in a separate Canvas renderer.
+    val snapshotCallback by rememberUpdatedState(onMapSnapshot)
+    val captureEnabled = onMapSnapshot != null
+    var snapshotInFlight by remember(mapView) { mutableStateOf(false) }
+    var lastSnapshotAt by remember(mapView) { mutableStateOf(0L) }
+    val frameListener = remember(mapView, captureEnabled) {
+        object : MapView.OnDidFinishRenderingFrameListener {
+            override fun onDidFinishRenderingFrame(
+                fully: Boolean,
+                frameEncodingTime: Double,
+                frameRenderingTime: Double,
+            ) {
+                if (!captureEnabled || !fully || snapshotInFlight) return
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastSnapshotAt < 100L) return
+                val currentMap = map ?: return
+                snapshotInFlight = true
+                lastSnapshotAt = now
+                currentMap.snapshot { bitmap ->
+                    snapshotInFlight = false
+                    snapshotCallback?.invoke(bitmap)
+                }
+            }
+        }
+    }
+    DisposableEffect(mapView, frameListener, captureEnabled) {
+        if (captureEnabled) mapView.addOnDidFinishRenderingFrameListener(frameListener)
+        onDispose {
+            if (captureEnabled) mapView.removeOnDidFinishRenderingFrameListener(frameListener)
         }
     }
 

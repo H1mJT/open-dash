@@ -11,6 +11,9 @@ import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.graphics.Bitmap
+import com.example.opendash.dash.map.MapLibreSnapshotRenderer
+import com.example.opendash.dash.map.MapRenderer
 import android.os.PowerManager
 import com.example.opendash.MainActivity
 import com.example.opendash.R
@@ -51,10 +54,39 @@ class DashKeepAliveService : Service() {
         }
     }
 
+    inner class LocalBinder : android.os.Binder() {
+        fun service(): DashKeepAliveService = this@DashKeepAliveService
+    }
+
+    private val binder = LocalBinder()
+    private var mapRenderer: MapLibreSnapshotRenderer? = null
+    @Volatile private var mapFrameListener: ((Bitmap) -> Unit)? = null
+
+    fun setMapFrameListener(listener: ((Bitmap) -> Unit)?) {
+        mapFrameListener = listener
+    }
+
+    @Synchronized fun submitMapFrame(frame: MapRenderer.Frame) {
+        if (mapRenderer == null) {
+            mapRenderer = MapLibreSnapshotRenderer(
+                applicationContext,
+                onFrame = { bitmap -> mapFrameListener?.invoke(bitmap) },
+                onError = { message -> DebugLog.w(TAG) { message } },
+            )
+        }
+        mapRenderer?.submit(frame)
+    }
+
+    @Synchronized fun stopMapRenderer() {
+        mapRenderer?.release()
+        mapRenderer = null
+        mapFrameListener = null
+    }
+
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -111,6 +143,7 @@ class DashKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        stopMapRenderer()
         releaseLocks()
         DebugLog.i(TAG) { "Foreground service stopped — locks released" }
         super.onDestroy()

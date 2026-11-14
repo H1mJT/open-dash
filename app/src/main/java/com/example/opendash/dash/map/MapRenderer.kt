@@ -44,6 +44,7 @@ class MapRenderer(private val tiles: TileProvider) {
         val rerouting: Boolean = false,
         val remainingText: String? = null, // e.g. "186 km"
         val tilt3d: Boolean = false,       // perspective 3D navigation view
+        val navigationMode: Boolean = false, // forward-looking route/follow camera, independent of pitch
         val etaPrimary: String? = null,    // big glance value, e.g. "24 min" (nav only)
         val etaSecondary: String? = null,  // smaller line, e.g. "18 km · 13:32"
         val gpsWeak: Boolean = false,
@@ -219,6 +220,13 @@ class MapRenderer(private val tiles: TileProvider) {
 
         if (rotate || tilt) canvas.restore()
 
+        drawOverlays(canvas, f)
+    }
+
+    /** Draws dash HUD over an already-rendered map background (including native MapLibre). */
+    fun drawOverlays(canvas: Canvas, f: Frame) {
+        val w = canvas.width
+        val h = canvas.height
         // ── Guidance overlays (screen space) ──
         if (f.rerouting) {
             tmpRect.set(24f, 14f, w - 24f, 58f)

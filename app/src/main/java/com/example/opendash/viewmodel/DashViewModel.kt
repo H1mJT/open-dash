@@ -1,8 +1,15 @@
 package com.example.opendash.viewmodel
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
@@ -111,7 +118,7 @@ data class DashUiState(
     val pendingPairingSsid: String? = null,
     val offlineStatus: OfflineStatus = OfflineStatus.INSUFFICIENT_COVERAGE,
     val dashLayout: DashLayout = DashLayout.MAP_FIRST,
-    /** Perspective map view, only used while following a route heading-up. */
+    /** Keep the map in its forward-looking perspective camera while location is available. */
     val navigationTiltEnabled: Boolean = true,
     val streamFps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS,
     val streamBitrateKbps: Int = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS,
@@ -154,6 +161,19 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private var encoder: DashEncoder? = null
     private var streamJob: Job? = null
     private var mediaObserveJob: Job? = null
+    @Volatile private var dashRendererService: DashKeepAliveService? = null
+    private var dashRendererBound = false
+    private val dashRendererConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as? DashKeepAliveService.LocalBinder)?.service() ?: return
+            dashRendererService = service
+            service.setMapFrameListener(::acceptMapLibreFrame)
+            lastMapFrame?.let(service::submitMapFrame)
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            dashRendererService = null
+        }
+    }
     @Volatile private var streamFps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_FPS
     @Volatile private var streamBitrateKbps = com.example.opendash.dash.DashConfig.DEFAULT_STREAM_BITRATE_KBPS
 
@@ -311,6 +331,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     // Frame cache (avoid the expensive redraw when nothing changed)
     @Volatile private var frameBitmap: Bitmap? = null
+    private val frameLock = Any()
+    private val mapFramePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    @Volatile private var lastMapFrame: MapRenderer.Frame? = null
     private var lastSignature = ""
     private var lastRedrawAt = 0L
     @Volatile private var wallpaperFrameRevision = 0
@@ -525,10 +548,61 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The exact bitmap currently sent to the dash encoder. The dashboard preview displays
-     * this shared frame rather than rendering a second, independently configured map.
+     * The exact bitmap currently sent to the dash encoder. During streaming it is filled
+     * from native MapLibre snapshots produced by the mounted navigation preview.
      */
     fun projectedFrame(): Bitmap? = frameBitmap
+
+    /** Accepts an off-screen native MapLibre snapshot produced by the foreground service. */
+    private fun bindDashMapRenderer() {
+        if (dashRendererBound) return
+        val context = getApplication<Application>()
+        dashRendererBound = context.bindService(
+            Intent(context, DashKeepAliveService::class.java),
+            dashRendererConnection,
+            Context.BIND_AUTO_CREATE,
+        )
+    }
+
+    private fun unbindDashMapRenderer() {
+        dashRendererService?.let {
+            it.setMapFrameListener(null)
+            it.stopMapRenderer()
+        }
+        dashRendererService = null
+        if (dashRendererBound) {
+            runCatching { getApplication<Application>().unbindService(dashRendererConnection) }
+            dashRendererBound = false
+        }
+    }
+
+    private fun publishServiceMapFrame(frame: MapRenderer.Frame) {
+        dashRendererService?.submitMapFrame(frame)
+    }
+
+    fun acceptMapLibreFrame(mapFrame: Bitmap) {
+        if (session.state.value != DashState.STREAMING || !tiles.hasInternetAccess()) return
+        val accepted = synchronized(frameLock) {
+            // Resolve the target only after acquiring the same lock used by the encoder
+            // and teardown, so a late service callback cannot draw into a recycled bitmap.
+            val target = frameBitmap ?: return@synchronized false
+            if (session.state.value != DashState.STREAMING || !tiles.hasInternetAccess()) return@synchronized false
+            val canvas = Canvas(target)
+            canvas.drawColor(android.graphics.Color.BLACK)
+            canvas.drawBitmap(
+                mapFrame,
+                null,
+                Rect(0, 0, target.width, target.height),
+                mapFramePaint,
+            )
+            lastMapFrame?.let { mapRenderer.drawOverlays(canvas, it) }
+            drawCallOverlay(canvas, target.width, target.height)
+            true
+        }
+        if (accepted) {
+            _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+        }
+    }
 
     fun connect() {
         userWantsConnection = true
@@ -907,13 +981,16 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder?.release()
         encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
-        frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        synchronized(frameLock) {
+            frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
         lastSignature = ""
         // Fresh camera so it snaps to the first fix instead of gliding from a stale spot.
         camInit = false; lastTickNs = 0L; lastFixTime = 0L
 
         session.startStreaming()
+        bindDashMapRenderer()
         startMediaForwarding()
         location.location.value?.let { tiles.prefetch(it.latitude, it.longitude) }
 
@@ -926,11 +1003,15 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     tick()
                     // Push the (possibly cached) frame to the encoder at the selected rate.
-                    val bmp = frameBitmap
                     val enc = encoder
-                    if (bmp != null && enc != null) {
-                        enc.renderFrame { canvas -> canvas.drawBitmap(bmp, 0f, 0f, null) }
-                        enc.drain()
+                    if (frameBitmap != null && enc != null) {
+                        synchronized(frameLock) {
+                            val bmp = frameBitmap
+                            if (bmp != null) {
+                                enc.renderFrame { canvas -> canvas.drawBitmap(bmp, 0f, 0f, null) }
+                                enc.drain()
+                            }
+                        }
                     }
                     failures = 0
                     // Warm the tile cache ahead of the rider every ~20 s.
@@ -1213,6 +1294,31 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         val bmp = frameBitmap ?: return
         val loc = location.location.value
         if (route == null && destLat == null && destLng == null) {
+            // Free-roam has no route, but still needs current HUD state layered over the
+            // native MapLibre frame (GPS status / layout / speed).
+            if (session.state.value == DashState.STREAMING) {
+                val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
+                lastMapFrame = MapRenderer.Frame(
+                    centerLat = centerLat,
+                    centerLng = centerLng,
+                    zoom = zoom,
+                    panX = panX,
+                    panY = panY,
+                    headingUp = (headingUp || useNavigation3d) && (loc != null),
+                    heading = heading,
+                    riderLat = frameRiderLat,
+                    riderLng = frameRiderLng,
+                    gpsWeak = gpsStatus == GpsStatus.WEAK,
+                    gpsLost = gpsStatus == GpsStatus.LOST,
+                    layout = _ui.value.dashLayout,
+                    speedKph = (loc?.speed ?: 0f) * 3.6f,
+                    tilt3d = useNavigation3d,
+                    navigationMode = useNavigation3d,
+                )
+                if (tiles.hasInternetAccess()) publishServiceMapFrame(lastMapFrame!!)
+                else drawRasterFallback(bmp, lastMapFrame!!)
+                return
+            }
             val canvas = Canvas(bmp)
             idleRenderer.draw(
                 canvas,
@@ -1243,7 +1349,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // travel-direction bearing. The bitmap renderer previously kept a rider-selected
         // north-up bearing while tilted, which made the streamed map read as flat beside the
         // pre-connection MapLibre preview. An active 3D route therefore owns its bearing.
-        val useNavigation3d = _ui.value.navigationTiltEnabled && route != null && loc != null
+        // Keep the dash in its forward-looking 3D camera whenever tilt is enabled.
+        // The preview and stream now share the same native MapLibre camera.
+        val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
         val frame = MapRenderer.Frame(
             centerLat = centerLat,
             centerLng = centerLng,
@@ -1267,6 +1375,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             // but it supplies the forward-looking navigation view riders expect. Keep pitch
             // and travel-direction bearing together to mirror MapLibre's 3D camera.
             tilt3d = useNavigation3d,
+            navigationMode = loc != null && (route != null || _ui.value.navigationTiltEnabled),
             etaPrimary = etaPrimary,
             etaSecondary = etaSecondary,
             gpsWeak = gpsStatus == GpsStatus.WEAK,
@@ -1274,9 +1383,32 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             layout = _ui.value.dashLayout,
             speedKph = (loc?.speed ?: 0f) * 3.6f,
         )
+        lastMapFrame = frame
+        // The foreground service owns the off-screen MapLibre renderer. It keeps
+        // capturing the native vector style even when the Activity/Compose tree stops.
+        if (session.state.value == DashState.STREAMING) {
+            if (tiles.hasInternetAccess()) publishServiceMapFrame(frame)
+            else drawRasterFallback(bmp, frame)
+            return
+        }
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+    }
+
+    /**
+     * Preserve downloaded TileProvider map packs when the phone has no validated
+     * internet route. Liberty vector tiles are online-only in this build; use the
+     * established raster renderer as an offline fallback instead of streaming a blank map.
+     */
+    private fun drawRasterFallback(bitmap: Bitmap, frame: MapRenderer.Frame) {
+        synchronized(frameLock) {
+            if (frameBitmap !== bitmap || bitmap.isRecycled) return
+            val canvas = Canvas(bitmap)
+            mapRenderer.draw(canvas, frame)
+            drawCallOverlay(canvas, bitmap.width, bitmap.height)
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
@@ -1430,10 +1562,14 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun teardown() {
         streamJob?.cancel(); streamJob = null
+        unbindDashMapRenderer()
         stopMediaForwarding()
         encoder?.release(); encoder = null
         idleRenderer.release()
-        frameBitmap?.recycle(); frameBitmap = null
+        synchronized(frameLock) {
+            frameBitmap?.recycle()
+            frameBitmap = null
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 

@@ -246,6 +246,9 @@ class TileProvider(context: Context, private val scope: CoroutineScope) {
         }
     }
 
+    /** True when a validated internet network is available alongside the dash Wi-Fi. */
+    fun hasInternetAccess(): Boolean = internetNetwork() != null
+
     @Suppress("DEPRECATION")
     private fun internetNetwork(): Network? =
         cm.allNetworks.firstOrNull { n ->
