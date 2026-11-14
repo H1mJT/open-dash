@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.ComponentName
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -67,7 +66,7 @@ class DashKeepAliveService : Service() {
         mapFrameListener = listener
     }
 
-    fun submitMapFrame(frame: MapRenderer.Frame) {
+    @Synchronized fun submitMapFrame(frame: MapRenderer.Frame) {
         if (mapRenderer == null) {
             mapRenderer = MapLibreSnapshotRenderer(
                 applicationContext,
@@ -78,7 +77,7 @@ class DashKeepAliveService : Service() {
         mapRenderer?.submit(frame)
     }
 
-    fun stopMapRenderer() {
+    @Synchronized fun stopMapRenderer() {
         mapRenderer?.release()
         mapRenderer = null
         mapFrameListener = null
