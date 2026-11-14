@@ -3,6 +3,8 @@ package com.example.opendash.viewmodel
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
@@ -311,6 +313,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     // Frame cache (avoid the expensive redraw when nothing changed)
     @Volatile private var frameBitmap: Bitmap? = null
+    private val frameLock = Any()
+    private val mapFramePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private var lastSignature = ""
     private var lastRedrawAt = 0L
     @Volatile private var wallpaperFrameRevision = 0
@@ -529,6 +533,28 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
      * this shared frame rather than rendering a second, independently configured map.
      */
     fun projectedFrame(): Bitmap? = frameBitmap
+
+    /**
+     * Accepts a native MapLibre snapshot from the live navigation preview. The map view
+     * remains mounted during streaming, so this bitmap contains the same vector style,
+     * 3D buildings, route annotations and camera that the rider sees on the phone.
+     */
+    fun acceptMapLibreFrame(mapFrame: Bitmap) {
+        if (session.state.value != DashState.STREAMING) return
+        val target = frameBitmap ?: return
+        synchronized(frameLock) {
+            val canvas = Canvas(target)
+            canvas.drawColor(android.graphics.Color.BLACK)
+            canvas.drawBitmap(
+                mapFrame,
+                null,
+                Rect(0, 0, target.width, target.height),
+                mapFramePaint,
+            )
+            drawCallOverlay(canvas, target.width, target.height)
+        }
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+    }
 
     fun connect() {
         userWantsConnection = true
@@ -926,11 +952,15 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     tick()
                     // Push the (possibly cached) frame to the encoder at the selected rate.
-                    val bmp = frameBitmap
                     val enc = encoder
-                    if (bmp != null && enc != null) {
-                        enc.renderFrame { canvas -> canvas.drawBitmap(bmp, 0f, 0f, null) }
-                        enc.drain()
+                    if (frameBitmap != null && enc != null) {
+                        synchronized(frameLock) {
+                            val bmp = frameBitmap
+                            if (bmp != null) {
+                                enc.renderFrame { canvas -> canvas.drawBitmap(bmp, 0f, 0f, null) }
+                                enc.drain()
+                            }
+                        }
                     }
                     failures = 0
                     // Warm the tile cache ahead of the rider every ~20 s.
@@ -1210,6 +1240,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     private fun redrawFrame(
         centerLat: Double, centerLng: Double, heading: Float, remainingM: Double?,
     ) {
+        // During streaming the mounted MapLibre view is the source of truth for map pixels.
+        // Never let the legacy Canvas/raster renderer overwrite its latest native snapshot.
+        if (session.state.value == DashState.STREAMING) return
         val bmp = frameBitmap ?: return
         val loc = location.location.value
         if (route == null && destLat == null && destLng == null) {
@@ -1243,7 +1276,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // travel-direction bearing. The bitmap renderer previously kept a rider-selected
         // north-up bearing while tilted, which made the streamed map read as flat beside the
         // pre-connection MapLibre preview. An active 3D route therefore owns its bearing.
-        // Keep the dash in its forward-looking 3D camera whenever tilt is enabled.\n        // Requiring an active route here caused the streamed bitmap to fall back to a\n        // top-down map during free-roam / route transitions, unlike the phone preview.\n        val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
+        // Keep the dash in its forward-looking 3D camera whenever tilt is enabled.
+        // The preview and stream now share the same native MapLibre camera.
+        val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
         val frame = MapRenderer.Frame(
             centerLat = centerLat,
             centerLng = centerLng,
