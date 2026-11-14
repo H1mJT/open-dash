@@ -581,12 +581,12 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun acceptMapLibreFrame(mapFrame: Bitmap) {
-        if (session.state.value != DashState.STREAMING) return
+        if (session.state.value != DashState.STREAMING || !tiles.hasInternetAccess()) return
         val accepted = synchronized(frameLock) {
             // Resolve the target only after acquiring the same lock used by the encoder
             // and teardown, so a late service callback cannot draw into a recycled bitmap.
             val target = frameBitmap ?: return@synchronized false
-            if (session.state.value != DashState.STREAMING) return@synchronized false
+            if (session.state.value != DashState.STREAMING || !tiles.hasInternetAccess()) return@synchronized false
             val canvas = Canvas(target)
             canvas.drawColor(android.graphics.Color.BLACK)
             canvas.drawBitmap(
@@ -1315,7 +1315,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     tilt3d = useNavigation3d,
                     navigationMode = useNavigation3d,
                 )
-                publishServiceMapFrame(lastMapFrame!!)
+                if (tiles.hasInternetAccess()) publishServiceMapFrame(lastMapFrame!!)
+                else drawRasterFallback(bmp, lastMapFrame!!)
                 return
             }
             val canvas = Canvas(bmp)
@@ -1386,12 +1387,28 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // The foreground service owns the off-screen MapLibre renderer. It keeps
         // capturing the native vector style even when the Activity/Compose tree stops.
         if (session.state.value == DashState.STREAMING) {
-            publishServiceMapFrame(frame)
+            if (tiles.hasInternetAccess()) publishServiceMapFrame(frame)
+            else drawRasterFallback(bmp, frame)
             return
         }
         val canvas = Canvas(bmp)
         mapRenderer.draw(canvas, frame)
         drawCallOverlay(canvas, bmp.width, bmp.height)
+        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+    }
+
+    /**
+     * Preserve downloaded TileProvider map packs when the phone has no validated
+     * internet route. Liberty vector tiles are online-only in this build; use the
+     * established raster renderer as an offline fallback instead of streaming a blank map.
+     */
+    private fun drawRasterFallback(bitmap: Bitmap, frame: MapRenderer.Frame) {
+        synchronized(frameLock) {
+            if (frameBitmap !== bitmap || bitmap.isRecycled) return
+            val canvas = Canvas(bitmap)
+            mapRenderer.draw(canvas, frame)
+            drawCallOverlay(canvas, bitmap.width, bitmap.height)
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
