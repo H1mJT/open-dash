@@ -529,8 +529,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The exact bitmap currently sent to the dash encoder. The dashboard preview displays
-     * this shared frame rather than rendering a second, independently configured map.
+     * The exact bitmap currently sent to the dash encoder. During streaming it is filled
+     * from native MapLibre snapshots produced by the mounted navigation preview.
      */
     fun projectedFrame(): Bitmap? = frameBitmap
 
