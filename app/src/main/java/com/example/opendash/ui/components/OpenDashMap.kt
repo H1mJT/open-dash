@@ -299,7 +299,7 @@ private fun MapLibreOpenDashMap(
             ) {
                 if (!captureEnabled || !fully || snapshotInFlight) return
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastSnapshotAt < 180L) return
+                if (now - lastSnapshotAt < 100L) return
                 val currentMap = map ?: return
                 snapshotInFlight = true
                 lastSnapshotAt = now
