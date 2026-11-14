@@ -97,7 +97,7 @@ fun OpenDashMap(
     // Google Maps Embed does not expose route-progress, heading, or camera-tilt APIs.
     // Keep it for static browsing, but use the same controllable MapLibre navigation
     // camera as the dash whenever guidance is active.
-    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey && !navMode) {
+    if (provider == MapProvider.GOOGLE_MAPS && hasGoogleMapsKey && !navMode && onMapSnapshot == null) {
         GoogleMapsEmbed(
             riderLat = riderLat,
             riderLng = riderLng,
