@@ -582,8 +582,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
 
     fun acceptMapLibreFrame(mapFrame: Bitmap) {
         if (session.state.value != DashState.STREAMING) return
-        val target = frameBitmap ?: return
-        synchronized(frameLock) {
+        val accepted = synchronized(frameLock) {
+            // Resolve the target only after acquiring the same lock used by the encoder
+            // and teardown, so a late service callback cannot draw into a recycled bitmap.
+            val target = frameBitmap ?: return@synchronized false
+            if (session.state.value != DashState.STREAMING) return@synchronized false
             val canvas = Canvas(target)
             canvas.drawColor(android.graphics.Color.BLACK)
             canvas.drawBitmap(
@@ -594,8 +597,11 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
             )
             lastMapFrame?.let { mapRenderer.drawOverlays(canvas, it) }
             drawCallOverlay(canvas, target.width, target.height)
+            true
         }
-        _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+        if (accepted) {
+            _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
+        }
     }
 
     fun connect() {
@@ -975,7 +981,9 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         encoder?.release()
         encoder = DashEncoder(onEncoded, streamFps, streamBitrateKbps * 1_000).also { it.prepare() }
 
-        frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        synchronized(frameLock) {
+            frameBitmap = Bitmap.createBitmap(DashEncoder.WIDTH, DashEncoder.HEIGHT, Bitmap.Config.ARGB_8888)
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
         lastSignature = ""
         // Fresh camera so it snaps to the first fix instead of gliding from a stale spot.
@@ -1294,6 +1302,8 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     centerLat = centerLat,
                     centerLng = centerLng,
                     zoom = zoom,
+                    panX = panX,
+                    panY = panY,
                     headingUp = (headingUp || useNavigation3d) && (loc != null),
                     heading = heading,
                     riderLat = frameRiderLat,
@@ -1537,7 +1547,10 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         stopMediaForwarding()
         encoder?.release(); encoder = null
         idleRenderer.release()
-        frameBitmap?.recycle(); frameBitmap = null
+        synchronized(frameLock) {
+            frameBitmap?.recycle()
+            frameBitmap = null
+        }
         _ui.update { it.copy(projectionFrameRevision = it.projectionFrameRevision + 1) }
     }
 
