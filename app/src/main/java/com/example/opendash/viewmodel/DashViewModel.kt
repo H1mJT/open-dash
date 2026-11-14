@@ -1243,7 +1243,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
         // travel-direction bearing. The bitmap renderer previously kept a rider-selected
         // north-up bearing while tilted, which made the streamed map read as flat beside the
         // pre-connection MapLibre preview. An active 3D route therefore owns its bearing.
-        val useNavigation3d = _ui.value.navigationTiltEnabled && route != null && loc != null
+        // Keep the dash in its forward-looking 3D camera whenever tilt is enabled.\n        // Requiring an active route here caused the streamed bitmap to fall back to a\n        // top-down map during free-roam / route transitions, unlike the phone preview.\n        val useNavigation3d = _ui.value.navigationTiltEnabled && loc != null
         val frame = MapRenderer.Frame(
             centerLat = centerLat,
             centerLng = centerLng,
