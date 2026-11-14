@@ -311,7 +311,10 @@ fun DashScreen(vm: DashViewModel = viewModel()) {
                     dest = ui.destLatLng,
                     routePoints = ui.routePoints,
                     hasLocationPermission = hasEssentialPermissions(),
-                    navMode = ui.navigationTiltEnabled,
+                    // Only force MapLibre navigation mode when a location fix exists;
+                    // otherwise keep the rider's selected idle map provider. A live route
+                    // still uses forward-follow camera when perspective pitch is disabled.
+                    navMode = ui.hasGps && (ui.hasRoute || ui.navigationTiltEnabled),
                     riderBearing = ui.riderBearing,
                     riderSpeedKph = ui.riderSpeedKph,
                     navigationTiltEnabled = ui.navigationTiltEnabled,
