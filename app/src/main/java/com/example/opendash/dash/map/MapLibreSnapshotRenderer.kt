@@ -82,15 +82,22 @@ internal class MapLibreSnapshotRenderer(
         }
 
         // Apply the same tile-pixel pan used by the phone MapLibre preview.
-        val targetTileX = Mercator.lngToTileX(frame.centerLng, frame.zoom) + frame.panX / Mercator.TILE_SIZE
-        val targetTileY = Mercator.latToTileY(frame.centerLat, frame.zoom) + frame.panY / Mercator.TILE_SIZE
+        // Match the in-app navigation camera: look 115 m ahead of the rider in 3D mode.
+        val baseTarget = if (frame.tilt3d && frame.riderLat != null && frame.riderLng != null) {
+            pointAhead(frame.centerLat, frame.centerLng, frame.heading.toDouble(), 115.0)
+        } else {
+            LatLng(frame.centerLat, frame.centerLng)
+        }
+        val targetTileX = Mercator.lngToTileX(baseTarget.longitude, frame.zoom) + frame.panX / Mercator.TILE_SIZE
+        val targetTileY = Mercator.latToTileY(baseTarget.latitude, frame.zoom) + frame.panY / Mercator.TILE_SIZE
         val cameraTarget = LatLng(
             Mercator.tileYToLat(targetTileY, frame.zoom),
             Mercator.tileXToLng(targetTileX, frame.zoom),
         )
+        val cameraZoom = if (frame.riderLat == null && frame.destLat != null) 13.0 else frame.zoom.toDouble()
         val camera = CameraPosition.Builder()
             .target(cameraTarget)
-            .zoom(frame.zoom.toDouble())
+            .zoom(cameraZoom)
             .bearing(if (frame.headingUp) frame.heading.toDouble() else 0.0)
             .tilt(if (frame.tilt3d) 55.0 else 0.0)
             .build()
@@ -133,6 +140,23 @@ internal class MapLibreSnapshotRenderer(
     }
 
     private val renderRunnable = Runnable { renderLatest() }
+
+    private fun pointAhead(lat: Double, lng: Double, bearingDeg: Double, distanceM: Double): LatLng {
+        val radius = 6_371_000.0
+        val bearing = Math.toRadians(bearingDeg)
+        val angular = distanceM / radius
+        val lat1 = Math.toRadians(lat)
+        val lng1 = Math.toRadians(lng)
+        val lat2 = Math.asin(
+            Math.sin(lat1) * Math.cos(angular) +
+                Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing)
+        )
+        val lng2 = lng1 + Math.atan2(
+            Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+            Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2),
+        )
+        return LatLng(Math.toDegrees(lat2), Math.toDegrees(lng2))
+    }
 
     private fun drawAnnotations(snapshot: MapSnapshot, frame: MapRenderer.Frame) {
         val bitmap = snapshot.bitmap
