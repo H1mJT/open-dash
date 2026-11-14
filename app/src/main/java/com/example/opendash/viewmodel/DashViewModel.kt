@@ -553,11 +553,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun projectedFrame(): Bitmap? = frameBitmap
 
-    /**
-     * Accepts a native MapLibre snapshot from the live navigation preview. The map view
-     * remains mounted during streaming, so this bitmap contains the same vector style,
-     * 3D buildings, route annotations and camera that the rider sees on the phone.
-     */
+    /** Accepts an off-screen native MapLibre snapshot produced by the foreground service. */
     private fun bindDashMapRenderer() {
         if (dashRendererBound) return
         val context = getApplication<Application>()
@@ -1306,6 +1302,7 @@ class DashViewModel(app: Application) : AndroidViewModel(app) {
                     gpsLost = gpsStatus == GpsStatus.LOST,
                     layout = _ui.value.dashLayout,
                     speedKph = (loc?.speed ?: 0f) * 3.6f,
+                    tilt3d = useNavigation3d,
                 )
                 publishServiceMapFrame(lastMapFrame!!)
                 return
